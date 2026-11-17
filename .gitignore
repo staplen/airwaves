@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.db
+*.db-*
+.env
+.DS_Store
+deploy/out/
+# Personal scratch notes (may contain location details)
+scratch.txt

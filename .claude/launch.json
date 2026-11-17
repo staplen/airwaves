@@ -1,0 +1,53 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "collector",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:collector"
+      ],
+      "port": 4000
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:web"
+      ],
+      "port": 5173
+    },
+    {
+      "name": "bundle",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8000",
+        "--directory",
+        "deploy/out"
+      ],
+      "port": 8000
+    },
+    {
+      "name": "web-pi",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "-w",
+        "web",
+        "--",
+        "--port",
+        "5174",
+        "--strictPort"
+      ],
+      "env": {
+        "API_TARGET": "http://homeassistant.local:8090"
+      },
+      "port": 5174
+    }
+  ]
+}

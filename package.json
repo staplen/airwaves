@@ -1,0 +1,15 @@
+{
+  "name": "airwaves",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "collector",
+    "web",
+    "scheduler"
+  ],
+  "scripts": {
+    "dev:collector": "npm run dev -w collector",
+    "dev:web": "npm run dev -w web",
+    "dev:scheduler": "npm start -w scheduler"
+  }
+}
