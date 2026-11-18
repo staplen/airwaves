@@ -87,35 +87,50 @@ function balloonsFC(list: Balloon[]): FC {
 }
 
 const OVERLAY_REFRESH_MS = 5 * 60_000;
-const BELOW = ['rings', 'ring-labels', 'home-halo', 'home', 'aids', 'aid-labels', 'ships', 'balloon-tracks', 'balloons', 'balloon-labels', 'aircraft'];
+type Layer = 'live' | 'traffic' | 'weather';
 
-function loadImage(url: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error(url));
-    img.src = url;
-  });
+/** Traffic tiles laid out in their broadcast grid (row 1 = north); missing tiles stay blank. */
+function TrafficGrid({ t }: { t: NonNullable<Overlays['traffic']> }) {
+  const placed = t.tiles.filter((x) => x.row && x.col);
+  if (!t.rows || !t.cols || placed.length !== t.tiles.length) {
+    // Older collector: no grid info, so just show what we have side by side.
+    return <div className="layer-row">{t.tiles.map((x) => <img key={x.url} src={x.url} alt="" draggable={false} />)}</div>;
+  }
+  const bg = t.background ? `rgb(${t.background.join(',')})` : 'var(--raised)';
+  return (
+    <div className="traffic-grid" style={{ gridTemplateColumns: `repeat(${t.cols}, 1fr)`, background: bg }}>
+      {placed.map((x) => <img key={x.url} src={x.url} alt="" draggable={false} style={{ gridRow: x.row, gridColumn: x.col }} />)}
+      {/* keeps the full grid's shape even when the last row or column is missing */}
+      <i style={{ gridRow: t.rows, gridColumn: t.cols, aspectRatio: '1' }} />
+    </div>
+  );
 }
 
-/** Traffic tiles are opaque: key out the olive background and the water blue so only roads and labels remain. */
-async function keyedTile(url: string, bg: [number, number, number] | undefined): Promise<string> {
-  const img = await loadImage(url);
-  const c = document.createElement('canvas');
-  c.width = img.naturalWidth;
-  c.height = img.naturalHeight;
-  const g = c.getContext('2d')!;
-  g.drawImage(img, 0, 0);
-  const d = g.getImageData(0, 0, c.width, c.height);
-  const px = d.data;
-  for (let i = 0; i < px.length; i += 4) {
-    const r = px[i], gr = px[i + 1], b = px[i + 2];
-    const isBg = bg !== undefined && Math.abs(r - bg[0]) <= 18 && Math.abs(gr - bg[1]) <= 18 && Math.abs(b - bg[2]) <= 18;
-    const isWater = b > r + 40 && b > gr + 10;
-    if (isBg || isWater) px[i + 3] = 0;
-  }
-  g.putImageData(d, 0, 0);
-  return c.toDataURL('image/png');
+/** Received images shown untouched, filling the card; zoom with the buttons, pan by scrolling or dragging. */
+function ImagePanel({ children, caption }: { children: React.ReactNode; caption: string }) {
+  const [zoom, setZoom] = useState(1);
+  const box = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ x: number; y: number; l: number; t: number }>(null);
+  return (
+    <div className="layer-panel">
+      <div
+        ref={box}
+        className="layer-scroll"
+        onPointerDown={(e) => { const b = box.current!; drag.current = { x: e.clientX, y: e.clientY, l: b.scrollLeft, t: b.scrollTop }; b.setPointerCapture(e.pointerId); }}
+        onPointerMove={(e) => { const d = drag.current; if (!d) return; box.current!.scrollLeft = d.l - (e.clientX - d.x); box.current!.scrollTop = d.t - (e.clientY - d.y); }}
+        onPointerUp={() => (drag.current = null)}
+      >
+        <div className="layer-img" style={{ width: `${zoom * 100}%` }}>{children}</div>
+      </div>
+      <div className="overlay-b">
+        <span className="tog muted" style={{ fontSize: 11 }}>{caption}</span>
+        <span className="tog" style={{ padding: 0, gap: 0 }}>
+          <button type="button" className="zoom-btn" aria-label="Zoom out" disabled={zoom <= 1} onClick={() => setZoom((z) => Math.max(1, z / 1.5))}>−</button>
+          <button type="button" className="zoom-btn" aria-label="Zoom in" disabled={zoom >= 5} onClick={() => setZoom((z) => Math.min(5, z * 1.5))}>+</button>
+        </span>
+      </div>
+    </div>
+  );
 }
 
 function fmtAlt(a: Aircraft): string {
@@ -161,8 +176,7 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
   const [ready, setReady] = useState(false);
   const centered = useRef(false);
   const [overlays, setOverlays] = useState<Overlays>({});
-  const applied = useRef<{ traffic?: string; radar?: string; ids: { traffic: string[]; radar: string[] } }>({ ids: { traffic: [], radar: [] } });
-  const gen = useRef({ traffic: 0, radar: 0 });
+  const [layer, setLayer] = useState<Layer>('live');
 
   useEffect(() => {
     const m = new MlMap({ container: el.current!, style: STYLE, center: [-77.03, 38.9], zoom: 8.6, attributionControl: { compact: true } });
@@ -258,79 +272,61 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
     };
   }, []);
 
-  useEffect(() => {
-    const m = map.current;
-    if (!ready || !m) return;
-    const clear = (kind: 'traffic' | 'radar') => {
-      for (const id of applied.current.ids[kind]) {
-        if (m.getLayer(id)) m.removeLayer(id);
-        if (m.getSource(id)) m.removeSource(id);
-      }
-      applied.current.ids[kind] = [];
-      applied.current[kind] = undefined;
-    };
-    const place = (kind: 'traffic' | 'radar', id: string, dataUrl: string, b: [number, number, number, number], opacity: number) => {
-      const [w, so, e, n] = b;
-      m.addSource(id, { type: 'image', url: dataUrl, coordinates: [[w, n], [e, n], [e, so], [w, so]] });
-      m.addLayer({ id, type: 'raster', source: id, paint: { 'raster-opacity': opacity, 'raster-fade-duration': 0 } }, BELOW.find((l) => m.getLayer(l)));
-      applied.current.ids[kind].push(id);
-    };
-    const sync = async (kind: 'traffic' | 'radar') => {
-      const o = overlays[kind];
-      const key = o ? (kind === 'traffic' ? overlays.traffic!.tiles.map((t) => t.url).join('|') : overlays.radar!.url) : undefined;
-      if (key === applied.current[kind]) return;
-      const my = ++gen.current[kind];
-      if (!key) return clear(kind);
-      try {
-        if (kind === 'traffic') {
-          const t = overlays.traffic!;
-          const urls = await Promise.all(t.tiles.map((x) => keyedTile(x.url, t.background)));
-          if (my !== gen.current.traffic || !map.current) return;
-          clear('traffic');
-          t.tiles.forEach((x, i) => place('traffic', `traffic-${i}`, urls[i], x.bounds, 0.9));
-        } else {
-          const r = overlays.radar!;
-          await loadImage(r.url);
-          if (my !== gen.current.radar || !map.current) return;
-          clear('radar');
-          place('radar', 'radar-0', r.url, r.bounds, 0.6);
-        }
-        applied.current[kind] = key;
-      } catch {
-        // leave the previous overlay in place; the next refresh retries
-      }
-    };
-    void sync('traffic');
-    void sync('radar');
-  }, [ready, overlays]);
-
   const now = snapshot?.now ?? Date.now();
   const adsb = snapshot?.sources.find((s) => s.id === 'adsb');
+
+  const tabs: { id: Layer; label: string; at?: number }[] = [
+    { id: 'live', label: 'Live' },
+    { id: 'traffic', label: 'Traffic', at: overlays.traffic?.updatedAt },
+    { id: 'weather', label: 'Weather', at: overlays.radar?.updatedAt },
+  ];
+  const short = (ts: number) => ago(ts, now).replace(/ ago$/, '').replace(' min', 'm').replace(' h', 'h').replace(' s', 's');
 
   return (
     <section className="card mapcard" aria-label="Map">
       <div ref={el} style={{ position: 'absolute', inset: 0 }} />
-      {adsb?.error && (
-        <div className="overlay-tr">
-          <span className="tog" style={{ color: 'var(--wx)' }}>
-            Receiver unreachable{adsb.lastHeard ? ` · last heard ${ago(adsb.lastHeard, now)}` : ''}
-          </span>
-        </div>
-      )}
-      <div className="overlay-b">
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end' }}>
-        <div className="tog" style={{ gap: 16 }}>
-          <span><b className="mono">{snapshot ? snapshot.stats.maxRangeNm.toFixed(0) : '—'}</b> <span className="muted">nm range</span></span>
-          <span><b className="mono">{snapshot?.stats.avgRssi?.toFixed(0) ?? '—'}</b> <span className="muted">dBFS</span></span>
-        </div>
-        {(overlays.traffic || overlays.radar) && (
-          <span className="tog muted" style={{ fontSize: 11 }}>
-            {[overlays.traffic && 'Traffic', overlays.radar && 'radar'].filter(Boolean).join(' & ').replace(/^radar/, 'Radar')} from HD Radio · {ago(Math.max(overlays.traffic?.updatedAt ?? 0, overlays.radar?.updatedAt ?? 0), now)}
-          </span>
-        )}
-        </div>
-        <span className="muted" style={{ fontSize: 11 }}>Faded = not heard in the last {STALE_S} s</span>
+      <div className="layer-tabs" role="tablist" aria-label="Map layers">
+        {tabs.map((t) => (
+          <button key={t.id} type="button" role="tab" aria-selected={layer === t.id} className={`layer-tab${layer === t.id ? ' on' : ''}${t.id !== 'live' && !t.at ? ' none' : ''}`} onClick={() => setLayer(t.id)}>
+            {t.label}
+            {t.id !== 'live' && <span className="layer-age">{t.at ? short(t.at) : '—'}</span>}
+          </button>
+        ))}
       </div>
+      {layer === 'live' && (
+        <>
+          {adsb?.error && (
+            <div className="overlay-tr">
+              <span className="tog" style={{ color: 'var(--wx)' }}>
+                Receiver unreachable{adsb.lastHeard ? ` · last heard ${ago(adsb.lastHeard, now)}` : ''}
+              </span>
+            </div>
+          )}
+          <div className="overlay-b">
+            <div className="tog" style={{ gap: 16 }}>
+              <span><b className="mono">{snapshot ? snapshot.stats.maxRangeNm.toFixed(0) : '—'}</b> <span className="muted">nm range</span></span>
+              <span><b className="mono">{snapshot?.stats.avgRssi?.toFixed(0) ?? '—'}</b> <span className="muted">dBFS</span></span>
+            </div>
+            <span className="muted" style={{ fontSize: 11 }}>Faded = not heard in the last {STALE_S} s</span>
+          </div>
+        </>
+      )}
+      {layer === 'traffic' &&
+        (overlays.traffic ? (
+          <ImagePanel caption={`Traffic map from HD Radio · received ${ago(overlays.traffic.updatedAt, now)}${overlays.traffic.rows && overlays.traffic.cols && overlays.traffic.tiles.length < overlays.traffic.rows * overlays.traffic.cols ? ` · ${overlays.traffic.tiles.length} of ${overlays.traffic.rows * overlays.traffic.cols} tiles so far` : ''}`}>
+            <TrafficGrid t={overlays.traffic} />
+          </ImagePanel>
+        ) : (
+          <div className="layer-panel layer-empty"><b>No traffic map received yet</b><span className="muted">Traffic maps come in over HD Radio during the HD Radio slot and are kept for 90 minutes.</span></div>
+        ))}
+      {layer === 'weather' &&
+        (overlays.radar ? (
+          <ImagePanel caption={`Radar from HD Radio · received ${ago(overlays.radar.updatedAt, now)}`}>
+            <img src={overlays.radar.url} alt="Weather radar image as broadcast" draggable={false} />
+          </ImagePanel>
+        ) : (
+          <div className="layer-panel layer-empty"><b>No radar image received yet</b><span className="muted">Radar comes in over HD Radio with the traffic maps. It will show here as broadcast.</span></div>
+        ))}
     </section>
   );
 }

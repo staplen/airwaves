@@ -58,7 +58,7 @@ function readTraffic(dir: string, files: string[], now: number): Overlays['traff
     if (!cur || ts > cur.ts) best.set(key, { file: f, ts });
   }
 
-  const tiles: { url: string; bounds: Bounds }[] = [];
+  const tiles: { url: string; bounds: Bounds; row: number; col: number }[] = [];
   let updatedAt = 0;
   for (const [key, { file, ts }] of [...best].sort()) {
     const [r, c] = key.split('_').map(Number);
@@ -72,11 +72,11 @@ function readTraffic(dir: string, files: string[], now: number): Overlays['traff
     const east = lons[c];
     const bounds: Bounds = [west, Math.min(...lats), east, Math.max(...lats)];
     if (!bounds.every(Number.isFinite)) continue;
-    tiles.push({ url: url(file), bounds });
+    tiles.push({ url: url(file), bounds, row: r, col: c });
     updatedAt = Math.max(updatedAt, ts);
   }
   if (!tiles.length) return undefined;
-  return { mapId, updatedAt, tiles, ...(bg ? { background: bg } : {}) };
+  return { mapId, updatedAt, rows, cols, tiles, ...(bg ? { background: bg } : {}) };
 }
 
 function pairsRgb(s: string): [number, number, number] | undefined {

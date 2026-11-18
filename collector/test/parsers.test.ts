@@ -158,6 +158,9 @@ test('overlays: traffic tiles and radar from HD Radio sample files', () => {
     assert.equal(o.traffic?.mapId, '03ggta');
     assert.equal(o.traffic?.tiles.length, 6);
     const t = o.traffic!.tiles.find((x) => x.url.includes('_1_1_'))!;
+    assert.equal(o.traffic?.rows, 3);
+    assert.equal(o.traffic?.cols, 3);
+    assert.deepEqual([t.row, t.col], [1, 1]);
     const want = [-77.74783, 39.11168, -77.39091, 39.4686];
     want.forEach((w, i) => near(t.bounds[i], w, 1e-4));
     const want2 = [-79.98062, 36.70309, -74.59073, 40.90135];
