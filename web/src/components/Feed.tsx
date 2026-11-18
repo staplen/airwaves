@@ -233,7 +233,12 @@ export function Feed({ items }: { items: FeedItem[] }) {
                 <b style={{ fontSize: 13 }}>{highlight(i.title, words)}</b>
                 <span className="mono muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{highlight(metaLine(i), words)}</span>
               </div>
-              {i.body && !PLACEHOLDER.test(i.body) && <div className={i.mono ? 'catch-body mono' : 'catch-body'}>{highlight(i.body, words)}</div>}
+              {i.body && !PLACEHOLDER.test(i.body) && (
+                <div className={i.mono ? 'catch-body mono' : 'catch-body'} style={i.tag === 'Station message' ? { color: 'var(--muted)' } : undefined}>
+                  {i.tag && <span className="catch-tag">{i.tag}</span>}
+                  {highlight(i.body, words)}
+                </div>
+              )}
               {i.raw && (
                 <details className="raw">
                   <summary>Original message</summary>

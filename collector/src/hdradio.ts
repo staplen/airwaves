@@ -17,6 +17,8 @@ export interface HdCatch {
   image?: string; // album art file name copied into the served art folder
   logo?: string; // station logo file name copied into the served art folder
   clip?: string; // mp3 snippet file name, moved into the radio clips folder
+  textKind?: 'song' | 'message'; // what the title text looks like: a song, or an ad / promo / station ID
+  textSynced?: boolean; // false when the text changed while the clip was being recorded
 }
 
 const LINE = /^(?:\d\d:\d\d:\d\d\s+)?(Station name|Slogan|Title|Artist|Album):\s*(.+)$/;
@@ -31,13 +33,28 @@ export interface HdLog {
   album?: string;
   lots: { lot: number; port: string; name: string }[]; // completed LOT files
   artLot?: number; // LOT id of the current song's album art (last XHDR line)
+  titleSince?: number; // seconds of day when the last title first appeared
+  firstTitle?: boolean; // the last title is the first one heard on this visit (already playing when we tuned in)
+  endAt?: number; // seconds of day the recording stopped ("Clip end" marker, else the last timestamp)
 }
+
+const TIME = /^(\d\d):(\d\d):(\d\d)\s/;
+const CLIP_END = /^(?:\d\d:\d\d:\d\d\s+)?Clip end\b/;
 
 /** Parses nrsc5's log text: station name, slogan, the LAST title / artist / album, and the LOT files. */
 export function parseHdLog(text: string): HdLog {
   const r: HdLog = { lots: [] };
+  let titles = 0;
+  let lastTs: number | undefined;
   for (const line of text.split('\n')) {
     const t = line.trim();
+    const tm = t.match(TIME);
+    const sec = tm ? Number(tm[1]) * 3600 + Number(tm[2]) * 60 + Number(tm[3]) : undefined;
+    if (sec !== undefined) lastTs = sec;
+    if (CLIP_END.test(t)) {
+      r.endAt = sec;
+      continue;
+    }
     const lot = t.match(LOT_LINE);
     if (lot) {
       r.lots.push({ lot: Number(lot[2]), port: lot[1], name: lot[3] });
@@ -54,14 +71,51 @@ export function parseHdLog(text: string): HdLog {
     const v = l[2].trim();
     if (l[1] === 'Station name') r.station = v;
     else if (l[1] === 'Slogan') r.slogan = v;
-    else if (l[1] === 'Title') r.title = v;
+    else if (l[1] === 'Title') {
+      if (v !== r.title) {
+        titles++;
+        r.titleSince = sec;
+      }
+      r.title = v;
+    }
     else if (l[1] === 'Artist') r.artist = v;
     else if (l[1] === 'Album') r.album = v;
   }
+  r.firstTitle = titles === 1;
+  r.endAt ??= lastTs;
   return r;
 }
 
-export async function ingestHdRadio(dir: string, artDir: string, clipsRadioDir?: string): Promise<HdCatch[]> {
+/**
+ * Whether the title text belongs to the audio clip (the last `snipSec` seconds before endAt). The first
+ * title of a visit was already playing when we tuned in; a later one must have started before the clip did.
+ */
+export function textMatchesClip(log: HdLog, snipSec: number): boolean {
+  if (!log.title || log.firstTitle) return true;
+  if (log.titleSince === undefined || log.endAt === undefined) return true;
+  let clipStart = log.endAt - snipSec;
+  if (clipStart < 0) clipStart += 86400;
+  return log.titleSince <= clipStart;
+}
+
+const PHONE = /\b1[-\s.]?8\d\d\b|\(?\b\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b/;
+const PROMO = /https?:|www\.|\.(com|org|net|fm)\b|\bapp\b|download|stream|podcast|call now|text \w+ to|listen live|win\b|tickets|sponsored|attorney|injur/i;
+const STATION_ID = /\b\d{2,3}[.\-]\d\b|\bHD\d\b/; // "94.7", "88-5", "HD2"
+
+/** Rough guess whether the title text is a song or a station message (ad, promo, station ID). */
+export function classifyText(title: string | undefined, artist: string | undefined, station?: string, slogan?: string): 'song' | 'message' {
+  if (!title) return 'message';
+  const both = `${title} ${artist ?? ''}`;
+  if (PHONE.test(both) || PROMO.test(both)) return 'message';
+  if (!artist) return 'message';
+  const norm = (x?: string) => (x ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const a = norm(artist);
+  if (STATION_ID.test(both) || (a && (a === norm(slogan) || (norm(station).length > 2 && a.includes(norm(station)))))) return 'message';
+  if (norm(station).length > 2 && norm(title).includes(norm(station))) return 'message';
+  return 'song';
+}
+
+export async function ingestHdRadio(dir: string, artDir: string, clipsRadioDir?: string, snipSec = 12): Promise<HdCatch[]> {
   let files: string[];
   try {
     files = (await readdir(dir)).filter((f) => f.endsWith('.log'));
@@ -76,9 +130,15 @@ export async function ingestHdRadio(dir: string, artDir: string, clipsRadioDir?:
       const st = await stat(path);
       if (Date.now() - st.mtimeMs < 30_000) continue; // slot still running
       const m = f.match(/^([\d.]+)_(\d)_/);
-      const { lots, artLot, ...info } = parseHdLog(await readFile(path, 'utf8'));
-      const c: HdCatch = { ts: st.mtimeMs, freq: m?.[1] ?? '?', program: Number(m?.[2] ?? 0), ...info };
+      const log = parseHdLog(await readFile(path, 'utf8'));
+      const { station, slogan, title, artist, album, lots, artLot } = log;
+      const c: HdCatch = { ts: st.mtimeMs, freq: m?.[1] ?? '?', program: Number(m?.[2] ?? 0), station, slogan, title, artist, album };
+      if (title) {
+        c.textKind = classifyText(title, artist, station, slogan);
+        c.textSynced = textMatchesClip(log, snipSec);
+      }
       const artName = artLot !== undefined ? lots.find((l) => l.lot === artLot)?.name : undefined;
+      console.log(`hdradio ${c.freq}_${c.program}: ${lots.length} LOT files, art lot ${artLot ?? 'none announced'}${artLot !== undefined ? (artName ? ` (${artName}, received)` : ' (not received in time)') : ''}`);
       Object.assign(c, await collectImages(join(dir, 'aas', `${c.freq}_${c.program}`), artDir, `${c.freq}_${c.program}`, artName, join(dir, 'maps')));
       const mp3 = f.replace(/\.log$/, '.mp3');
       if (clipsRadioDir) {

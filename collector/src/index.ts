@@ -561,9 +561,16 @@ async function ingestFiles() {
     // Post to the feed on a song change, or the first time we see a station today.
     if (titleChanged || !prev || localDay(prev.updatedAt) !== localDay(c.ts)) {
       const playing = c.title ? `${c.title}${c.artist ? ` — ${c.artist}` : ''}` : c.slogan ?? 'No song information';
-      publishFeed({ ts: c.ts, family: 'bcast', kind: 'Radio', title: `${st.name ?? `${c.freq} FM`} HD${c.program + 1}`, meta: c.freq, body: playing, image: art ?? st.logo, clip });
+      publishFeed({ ts: c.ts, family: 'bcast', kind: 'Radio', title: `${st.name ?? `${c.freq} FM`} HD${c.program + 1}`, meta: c.freq, body: playing, image: art ?? st.logo, clip, tag: radioTag(c) });
     }
   }
+}
+/** Caveat for a radio feed item: the text is an ad / promo, or changed while the clip was recorded. */
+function radioTag(c: { title?: string; textKind?: string; textSynced?: boolean; clip?: string }): string | undefined {
+  if (!c.title) return undefined;
+  if (c.textKind === 'message') return 'Station message';
+  if (c.clip && c.textSynced === false) return 'Text changed during the clip';
+  return undefined;
 }
 setInterval(() => void ingestFiles(), 60_000);
 

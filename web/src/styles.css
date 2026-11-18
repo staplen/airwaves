@@ -154,6 +154,7 @@ button.tog[aria-pressed='false'] { color: var(--muted); }
 .heat { display: flex; flex-direction: column; gap: 1px; }
 .heat-row { display: grid; height: 6px; }
 .heat-row i { display: block; }
+.catch-tag { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 4px; border: 1px solid var(--line-strong); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); vertical-align: 1px; }
 .clip-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .clip-row .clipper { margin-top: 0; }
 .clip-row > :last-child { flex: 1; min-width: 0; }

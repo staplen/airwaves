@@ -85,6 +85,7 @@ for st in "${stations[@]}"; do
     [ "$el" -ge "$SWEEP_MAX" ] && break
   done
   stop_child
+  echo "$(date +%H:%M:%S) Clip end: last ${SNIP} s" >> "$log" # lets the collector line the text up with the clip
   [ -f "$wav" ] && encode_tail "$wav" "$OUT/$base.mp3"
   rm -f "$wav"
 done

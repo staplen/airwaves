@@ -58,12 +58,13 @@ export class Store {
     if (!cols.includes('clip')) this.db.exec('ALTER TABLE feed ADD COLUMN clip TEXT');
     if (!cols.includes('raw')) this.db.exec('ALTER TABLE feed ADD COLUMN raw TEXT');
     if (!cols.includes('image')) this.db.exec('ALTER TABLE feed ADD COLUMN image TEXT');
+    if (!cols.includes('tag')) this.db.exec('ALTER TABLE feed ADD COLUMN tag TEXT');
   }
 
   addFeed(item: Omit<FeedItem, 'id'>): FeedItem {
     const r = this.db
-      .prepare('INSERT INTO feed (ts, family, kind, title, meta, body, mono, clip, raw, image) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(item.ts, item.family, item.kind, item.title, item.meta, item.body, item.mono ? 1 : 0, item.clip ?? null, item.raw ?? null, item.image ?? null);
+      .prepare('INSERT INTO feed (ts, family, kind, title, meta, body, mono, clip, raw, image, tag) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(item.ts, item.family, item.kind, item.title, item.meta, item.body, item.mono ? 1 : 0, item.clip ?? null, item.raw ?? null, item.image ?? null, item.tag ?? null);
     return { ...item, id: Number(r.lastInsertRowid) };
   }
 
@@ -83,6 +84,7 @@ export class Store {
       clip: typeof r.clip === 'string' ? r.clip : undefined,
       image: typeof r.image === 'string' ? r.image : undefined,
       raw: typeof r.raw === 'string' ? r.raw : undefined,
+      tag: typeof r.tag === 'string' ? r.tag : undefined,
     }));
   }
 

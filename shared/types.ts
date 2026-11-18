@@ -106,6 +106,7 @@ export interface FeedItem {
   clip?: string; // audio URL for ATC / weather radio clips
   raw?: string; // original decoded text, when the body is a translation
   image?: string; // e.g. HD Radio album art URL
+  tag?: string; // short caveat shown before the body, e.g. "Station message"
 }
 
 /** An HD Radio station seen by the sweep, with what it was last playing. */

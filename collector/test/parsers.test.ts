@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { readOverlays } from '../src/overlays.ts';
-import { baseName, parseHdLog } from '../src/hdradio.ts';
+import { baseName, classifyText, parseHdLog, textMatchesClip } from '../src/hdradio.ts';
 
 const near = (a: number | undefined, b: number, eps = 0.01) => assert.ok(a !== undefined && Math.abs(a - b) < eps, `${a} not within ${eps} of ${b}`);
 
@@ -167,4 +167,29 @@ test('overlays: traffic tiles and radar from HD Radio sample files', () => {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('HD Radio text vs clip timing', () => {
+  // Title already playing at tune-in: matches.
+  const a = parseHdLog(['12:00:01 Station name: HOT', '12:00:04 Title: Taste', '12:00:04 Artist: Sabrina Carpenter', '12:00:16 Clip end: last 12 s'].join('\n'));
+  assert.equal(a.firstTitle, true);
+  assert.equal(textMatchesClip(a, 12), true);
+  // Title changed 4 s before the end: the clip mostly holds the previous audio.
+  const b = parseHdLog(['12:00:04 Title: Song A', '12:00:04 Artist: X', '12:00:12 Title: Injured? Call 1-800-HURT123', '12:00:16 Clip end: last 12 s'].join('\n'));
+  assert.equal(b.titleSince, 12 * 3600 + 12);
+  assert.equal(textMatchesClip(b, 12), false);
+  // Changed before the clip started: matches. Repeated title lines don't count as changes.
+  const c = parseHdLog(['12:00:00 Title: A', '12:00:02 Title: B', '12:00:10 Title: B', '12:00:20 Clip end: last 12 s'].join('\n'));
+  assert.equal(textMatchesClip(c, 12), true);
+});
+
+test('HD Radio text: songs vs station messages', () => {
+  assert.equal(classifyText('Love You, Miss You, Mean It', 'Luke Bryan', 'WMZQ', '98.7 WMZQ'), 'song');
+  assert.equal(classifyText('California Gurls', 'Katy Perry', 'HOT', 'HOT 99.5'), 'song');
+  assert.equal(classifyText('Injured? Attorney BIG AL 1-800-HURT123', undefined, 'HOT', 'HOT 99.5'), 'message');
+  assert.equal(classifyText("Nobody Plays More '80s!", '94.7 The Drive', 'WIAD', 'HD1'), 'message');
+  assert.equal(classifyText("Poe's Village Day On Wpgc With Dj Dubwise", 'Stream The Shenanigans On The Free Audacy App!!', 'WPGC', 'HD1'), 'message');
+  assert.equal(classifyText('WAMU 88-5 American University Radio', 'WAMU 88.5', 'WAMU', 'HD1'), 'message');
+  assert.equal(classifyText('BIG 100.3', undefined, 'BIG', 'HD1'), 'message');
+  assert.equal(classifyText('Turn to 92.7 & 95.9', 'Looking For Praise? Tune in', 'WLNO', 'HD1'), 'message');
 });
