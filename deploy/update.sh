@@ -28,9 +28,11 @@ mkdir -p /share/airwaves/data /share/airwaves/spectrum /share/airwaves/readsb /s
   /share/airwaves/sonde/log /media/airwaves/atc /media/airwaves/noaa /media/airwaves/radio
 [ -f /share/airwaves/sonde/station.cfg ] || cp "$APP/deploy/sonde/station.cfg" /share/airwaves/sonde/station.cfg
 
-echo "== building the dashboard"
+echo "== installing packages and building the dashboard"
+# Install once here (full install to build, then prune to runtime packages), so the collector and
+# scheduler containers never run npm themselves: two installs in the same folder at once corrupt it.
 docker run --rm -v "$HOST_APP:/app" -w /app node:26-alpine \
-  sh -c "npm ci --no-audit --no-fund --loglevel=error && npm run build -w web --silent" >/dev/null
+  sh -c "npm ci --no-audit --no-fund --loglevel=error && npm run build -w web --silent && npm prune --omit=dev --no-audit --no-fund --loglevel=error" >/dev/null
 echo "   done"
 
 # Rebuild a local decoder image only when its folder changed since the last build.
@@ -55,8 +57,8 @@ docker run -d --name airwaves-collector --restart unless-stopped --network host 
   -e PORT=8090 -e ADSB_URL=http://127.0.0.1:8080/data -e CLIPS_ROOT=/clips \
   -e DATA_DIR=/airwaves/data -e WEB_DIR=/airwaves/app/web/dist \
   -v "$SHARE:/airwaves" -v "$MEDIA:/clips" -w /airwaves/app node:26-alpine \
-  sh -c "npm ci --omit=dev --no-audit --no-fund && exec node collector/src/index.ts" >/dev/null
+  node collector/src/index.ts >/dev/null
 docker run -d --name airwaves-scheduler --restart unless-stopped --network host --env-file "$ENVFILE" \
   -v /var/run/docker.sock:/var/run/docker.sock -v "$SHARE:/airwaves" -w /airwaves/app node:26-alpine \
-  sh -c "npm ci --omit=dev --no-audit --no-fund && exec node scheduler/src/index.ts" >/dev/null
+  node scheduler/src/index.ts >/dev/null
 echo "== updated to $(git -C "$APP" log --oneline -1)"

@@ -31,7 +31,7 @@ Home Assistant OS path mapping (the SSH session runs in its own container):
      -v /mnt/data/supervisor/share/airwaves:/airwaves \
      -v /mnt/data/supervisor/media/airwaves:/clips \
      -w /airwaves/app node:26-alpine \
-     sh -c "npm ci --omit=dev --no-audit --no-fund && exec node collector/src/index.ts"
+     node collector/src/index.ts
    ```
 
 6. **Scheduler** (owns the dongle; needs the Docker socket to start and stop decoders):
@@ -42,7 +42,7 @@ Home Assistant OS path mapping (the SSH session runs in its own container):
      -v /var/run/docker.sock:/var/run/docker.sock \
      -v /mnt/data/supervisor/share/airwaves:/airwaves \
      -w /airwaves/app node:26-alpine \
-     sh -c "npm ci --omit=dev --no-audit --no-fund && exec node scheduler/src/index.ts"
+     node scheduler/src/index.ts
    ```
 
 **Updating:** `sh /share/airwaves/app/deploy/update.sh` pulls from GitHub, rebuilds the dashboard,
