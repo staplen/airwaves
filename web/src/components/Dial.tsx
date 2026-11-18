@@ -84,7 +84,7 @@ export function Dial({ snapshot }: { snapshot?: Snapshot }) {
             <span className="chip">
               <span className="dot" style={{ background: 'var(--live)' }} />
               {source.name}
-              {continuous ? ' · continuous' : current?.endsAt ? ` · ${remaining(current.endsAt, snapshot!.now)} left` : ''}
+              {continuous ? ' · continuous' : current?.endsAt ? (snapshot!.now >= current.endsAt ? ' · switching…' : ` · ${remaining(current.endsAt, snapshot!.now)} left`) : ''}
             </span>
           )}
         </div>

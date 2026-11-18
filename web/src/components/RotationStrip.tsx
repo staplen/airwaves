@@ -21,6 +21,9 @@ export function RotationStrip({ snapshot, expanded, onToggle }: { snapshot?: Sna
   // Current slot first (with progress), then what's next.
   const curMin = cur?.endsAt ? Math.max(0.5, (cur.endsAt - cur.since) / 60_000) : 3;
   const progress = cur?.endsAt ? Math.min(1, Math.max(0, (now - cur.since) / (cur.endsAt - cur.since))) : 1;
+  // Between the end of a slot and the next state update (a few seconds live, up to ~45 s on the
+  // published copy) show a "switching" state instead of a frozen 0:00.
+  const switching = rot?.mode === 'rotating' && !!cur?.endsAt && now >= cur.endsAt;
   const segments = rot?.mode === 'rotating' ? rot.upNext.map((n) => ({ id: n.sourceId, minutes: n.minutes })) : [];
 
   const loop = rot?.mode === 'rotating' ? rot.loop : undefined;
@@ -36,7 +39,13 @@ export function RotationStrip({ snapshot, expanded, onToggle }: { snapshot?: Sna
           <span className="strip-chip" style={{ color: curColor }}>
             <span className="dot" style={{ background: 'var(--live)' }} />
             <span className="strip-name">{curSrc.name}</span>
-            <span className="mono">{rot?.mode === 'continuous' || !cur?.endsAt ? '∞' : remaining(cur.endsAt, now)}</span>
+            {switching ? (
+              <span className="switching" role="status">
+                switching<span className="dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>
+              </span>
+            ) : (
+              <span className="mono">{rot?.mode === 'continuous' || !cur?.endsAt ? '∞' : remaining(cur.endsAt, now)}</span>
+            )}
           </span>
         )}
       </div>
@@ -49,14 +58,15 @@ export function RotationStrip({ snapshot, expanded, onToggle }: { snapshot?: Sna
             const title = `${so?.name ?? s.sourceId} · ${s.minutes} min`;
             if (i === runIdx) {
               return (
-                <div key={i} className="seg seg-now" style={{ flexGrow: s.minutes, borderColor: curColor }} title={title}>
+                <div key={i} className={switching ? 'seg seg-now seg-switching' : 'seg seg-now'} style={{ flexGrow: s.minutes, borderColor: curColor }} title={title}>
                   <div className="seg-fill" style={{ width: `${progress * 100}%`, background: curColor }} />
                   <span className="seg-label" style={{ color: curColor, position: 'relative' }}>{so?.name ?? s.sourceId}</span>
                 </div>
               );
             }
+            const nextUp = switching && i === (runIdx + 1) % loop.length;
             return (
-              <div key={i} className="seg" style={{ flexGrow: s.minutes, background: `${color}33`, color, opacity: i < runIdx ? 0.55 : 1 }} title={title}>
+              <div key={i} className={nextUp ? 'seg seg-next' : 'seg'} style={{ flexGrow: s.minutes, background: `${color}33`, color, opacity: i < runIdx ? 0.55 : 1 }} title={title}>
                 <span className="seg-label">{so?.name ?? s.sourceId}</span>
               </div>
             );
