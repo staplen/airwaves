@@ -3,13 +3,14 @@ import { createSocket } from 'node:dgram';
 import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, extname, join, normalize } from 'node:path';
 import { connect as mqttConnect } from 'mqtt';
-import type { Aircraft, AisFixed, Balloon, FeedItem, RadioStation, SchedulerState, Snapshot, SourceStatus, SpectrumHeat, Vessel } from '../../shared/types.ts';
+import type { Aircraft, AisFixed, Balloon, FeedItem, Overlays, RadioStation, SchedulerState, Snapshot, SourceStatus, SpectrumHeat, Vessel } from '../../shared/types.ts';
 import { AdsbSource } from './adsb.ts';
 import { AisDecoder, shipTypeName } from './ais.ts';
 import { ClipWatcher, type Clip } from './clips.ts';
 import { parseSame } from './eas.ts';
 import { ingestSpectrum, purgeOldFiles, SPECTRUM_BINS } from './housekeeping.ts';
 import { ingestHdRadio } from './hdradio.ts';
+import { readOverlays } from './overlays.ts';
 import { SondeTracker } from './sonde.ts';
 import { describeSensor, parseRtl433 } from './rtl433.ts';
 import { Store, localDay } from './store.ts';
@@ -461,6 +462,17 @@ const server = createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(heat));
     return;
+  }
+  if (p === '/api/overlays') {
+    let o: Overlays = {};
+    try {
+      o = readOverlays(join(HD_DIR, 'maps'), Date.now());
+    } catch {}
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(o));
+    return;
+  }
+  if (p.startsWith('/api/maps/')) {
+    if (serveFile(res, join(HD_DIR, 'maps'), p.slice('/api/maps/'.length))) return;
   }
   if (p.startsWith('/api/art/')) {
     if (serveFile(res, ART_DIR, p.slice('/api/art/'.length))) return;

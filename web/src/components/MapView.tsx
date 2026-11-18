@@ -4,7 +4,7 @@ import { Map as MlMap, setWorkerUrl, type GeoJSONSource } from 'maplibre-gl';
 // Let Vite bundle the worker (with its shared chunk) and hand MapLibre the URL.
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { Aircraft, AisFixed, Balloon, Home, Snapshot, Vessel } from '../../../shared/types.ts';
+import type { Aircraft, AisFixed, Balloon, Home, Overlays, Snapshot, Vessel } from '../../../shared/types.ts';
 import { ago } from '../live.ts';
 
 const STYLE = 'https://tiles.openfreemap.org/styles/dark';
@@ -76,6 +76,38 @@ function balloonsFC(list: Balloon[]): FC {
   return { type: 'FeatureCollection', features };
 }
 
+const OVERLAY_REFRESH_MS = 5 * 60_000;
+const BELOW = ['rings', 'ring-labels', 'home-halo', 'home', 'aids', 'aid-labels', 'ships', 'balloon-tracks', 'balloons', 'balloon-labels', 'aircraft'];
+
+function loadImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error(url));
+    img.src = url;
+  });
+}
+
+/** Traffic tiles are opaque: key out the olive background and the water blue so only roads and labels remain. */
+async function keyedTile(url: string, bg: [number, number, number] | undefined): Promise<string> {
+  const img = await loadImage(url);
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth;
+  c.height = img.naturalHeight;
+  const g = c.getContext('2d')!;
+  g.drawImage(img, 0, 0);
+  const d = g.getImageData(0, 0, c.width, c.height);
+  const px = d.data;
+  for (let i = 0; i < px.length; i += 4) {
+    const r = px[i], gr = px[i + 1], b = px[i + 2];
+    const isBg = bg !== undefined && Math.abs(r - bg[0]) <= 18 && Math.abs(gr - bg[1]) <= 18 && Math.abs(b - bg[2]) <= 18;
+    const isWater = b > r + 40 && b > gr + 10;
+    if (isBg || isWater) px[i + 3] = 0;
+  }
+  g.putImageData(d, 0, 0);
+  return c.toDataURL('image/png');
+}
+
 function fmtAlt(a: Aircraft): string {
   if (a.altBaro === 'ground') return 'GND';
   if (a.altBaro === undefined) return '';
@@ -118,6 +150,9 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
   const map = useRef<MlMap>(null);
   const [ready, setReady] = useState(false);
   const centered = useRef(false);
+  const [overlays, setOverlays] = useState<Overlays>({});
+  const applied = useRef<{ traffic?: string; radar?: string; ids: { traffic: string[]; radar: string[] } }>({ ids: { traffic: [], radar: [] } });
+  const gen = useRef({ traffic: 0, radar: 0 });
 
   useEffect(() => {
     const m = new MlMap({ container: el.current!, style: STYLE, center: [-77.03, 38.9], zoom: 8.6, attributionControl: { compact: true } });
@@ -193,6 +228,66 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
     }
   }, [ready, snapshot]);
 
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      fetch('/api/overlays')
+        .then((r) => (r.ok ? (r.json() as Promise<Overlays>) : {}))
+        .catch(() => ({}) as Overlays)
+        .then((o) => alive && setOverlays(o));
+    load();
+    const t = setInterval(load, OVERLAY_REFRESH_MS);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+
+  useEffect(() => {
+    const m = map.current;
+    if (!ready || !m) return;
+    const clear = (kind: 'traffic' | 'radar') => {
+      for (const id of applied.current.ids[kind]) {
+        if (m.getLayer(id)) m.removeLayer(id);
+        if (m.getSource(id)) m.removeSource(id);
+      }
+      applied.current.ids[kind] = [];
+      applied.current[kind] = undefined;
+    };
+    const place = (kind: 'traffic' | 'radar', id: string, dataUrl: string, b: [number, number, number, number], opacity: number) => {
+      const [w, so, e, n] = b;
+      m.addSource(id, { type: 'image', url: dataUrl, coordinates: [[w, n], [e, n], [e, so], [w, so]] });
+      m.addLayer({ id, type: 'raster', source: id, paint: { 'raster-opacity': opacity, 'raster-fade-duration': 0 } }, BELOW.find((l) => m.getLayer(l)));
+      applied.current.ids[kind].push(id);
+    };
+    const sync = async (kind: 'traffic' | 'radar') => {
+      const o = overlays[kind];
+      const key = o ? (kind === 'traffic' ? overlays.traffic!.tiles.map((t) => t.url).join('|') : overlays.radar!.url) : undefined;
+      if (key === applied.current[kind]) return;
+      const my = ++gen.current[kind];
+      if (!key) return clear(kind);
+      try {
+        if (kind === 'traffic') {
+          const t = overlays.traffic!;
+          const urls = await Promise.all(t.tiles.map((x) => keyedTile(x.url, t.background)));
+          if (my !== gen.current.traffic || !map.current) return;
+          clear('traffic');
+          t.tiles.forEach((x, i) => place('traffic', `traffic-${i}`, urls[i], x.bounds, 0.9));
+        } else {
+          const r = overlays.radar!;
+          await loadImage(r.url);
+          if (my !== gen.current.radar || !map.current) return;
+          clear('radar');
+          place('radar', 'radar-0', r.url, r.bounds, 0.6);
+        }
+        applied.current[kind] = key;
+      } catch {
+        // leave the previous overlay in place; the next refresh retries
+      }
+    };
+    void sync('traffic');
+    void sync('radar');
+  }, [ready, overlays]);
 
   const now = snapshot?.now ?? Date.now();
   const adsb = snapshot?.sources.find((s) => s.id === 'adsb');
@@ -208,9 +303,16 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
         </div>
       )}
       <div className="overlay-b">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end' }}>
         <div className="tog" style={{ gap: 16 }}>
           <span><b className="mono">{snapshot ? snapshot.stats.maxRangeNm.toFixed(0) : '—'}</b> <span className="muted">nm range</span></span>
           <span><b className="mono">{snapshot?.stats.avgRssi?.toFixed(0) ?? '—'}</b> <span className="muted">dBFS</span></span>
+        </div>
+        {(overlays.traffic || overlays.radar) && (
+          <span className="tog muted" style={{ fontSize: 11 }}>
+            {[overlays.traffic && 'Traffic', overlays.radar && 'radar'].filter(Boolean).join(' & ').replace(/^radar/, 'Radar')} from HD Radio · {ago(Math.max(overlays.traffic?.updatedAt ?? 0, overlays.radar?.updatedAt ?? 0), now)}
+          </span>
+        )}
         </div>
         <span className="muted" style={{ fontSize: 11 }}>Faded = not heard in the last {STALE_S} s</span>
       </div>

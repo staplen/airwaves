@@ -149,3 +149,9 @@ export interface SpectrumHeat {
   bins: number;
   rows: { hour: number; db: (number | null)[] }[]; // hour = epoch hours, oldest first
 }
+
+/** Traffic tiles and weather radar decoded off HD Radio data services. bounds = [west, south, east, north]. */
+export interface Overlays {
+  traffic?: { mapId: string; updatedAt: number; tiles: { url: string; bounds: [number, number, number, number] }[]; background?: [number, number, number] };
+  radar?: { url: string; updatedAt: number; bounds: [number, number, number, number] };
+}

@@ -6,6 +6,10 @@ import { flightName, translateAcars } from '../src/acars.ts';
 import { parseRtl433 } from '../src/rtl433.ts';
 import { parseSame } from '../src/eas.ts';
 import { SondeTracker } from '../src/sonde.ts';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { readOverlays } from '../src/overlays.ts';
 import { baseName, parseHdLog } from '../src/hdradio.ts';
 
 const near = (a: number | undefined, b: number, eps = 0.01) => assert.ok(a !== undefined && Math.abs(a - b) < eps, `${a} not within ${eps} of ${b}`);
@@ -132,4 +136,35 @@ test('nrsc5 dump names carry the LOT id prefix', () => {
   assert.equal(baseName('40448_WIHTHD029e00.jpg'), 'WIHTHD029e00.jpg');
   assert.equal(baseName('50015_SLWIHT$$0111270000.png'), 'SLWIHT$$0111270000.png');
   assert.equal(baseName('883_TMT_03ggta_3_3_20261118_1524_0373.png'), 'TMT_03ggta_3_3_20261118_1524_0373.png');
+});
+
+test('overlays: traffic tiles and radar from HD Radio sample files', () => {
+  // Synthetic copies of a real capture: the index files' coordinates verbatim, empty images.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overlays-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'TMI_03ggta_rev3_007e.txt'), [
+      'TrafficMapProtocolVersionID="1.3"', 'TrafficMapID="03ggta"', 'NumRows="3"', 'NumColumns="3"',
+      'CoordinatesRow1="(39.46860,-77.74783)";"(39.11168,-77.39091)";"(39.46860,-77.03399)";"(39.11168,-76.67707)"',
+      'CoordinatesRow2="(39.11168,-77.74783)";"(38.75476,-77.39091)";"(39.11168,-77.03399)";"(38.75476,-76.67707)"',
+      'CoordinatesRow3="(38.75476,-77.74783)";"(38.39784,-77.39091)";"(38.75476,-77.03399)";"(38.39784,-76.67707)"',
+      'BackgroundRGBColor="(194,187,96)"',
+    ].join('\n'));
+    fs.writeFileSync(path.join(dir, 'DWRI_03ggta_rev06_0493.txt'), 'DWR_Area_ID="03ggta"\nCoordinates="(40.90135,-79.98062)";"(36.70309,-74.59073)"\n');
+    for (const rc of ['3_3_20261118_1524_0373', '3_2_20261118_1524_0374', '3_1_20261118_1524_0375', '2_3_20261118_1524_0376', '1_2_20261118_1524_037a', '1_1_20261118_1524_037b'])
+      fs.writeFileSync(path.join(dir, `TMT_03ggta_${rc}.png`), '');
+    fs.writeFileSync(path.join(dir, 'DWRO_03ggta_rev06_20261118_1518_0756.png'), '');
+    const now = Date.UTC(2026, 10, 18, 15, 40);
+    const o = readOverlays(dir, now);
+    assert.equal(o.traffic?.mapId, '03ggta');
+    assert.equal(o.traffic?.tiles.length, 6);
+    const t = o.traffic!.tiles.find((x) => x.url.includes('_1_1_'))!;
+    const want = [-77.74783, 39.11168, -77.39091, 39.4686];
+    want.forEach((w, i) => near(t.bounds[i], w, 1e-4));
+    const want2 = [-79.98062, 36.70309, -74.59073, 40.90135];
+    want2.forEach((w, i) => near(o.radar?.bounds[i], w, 1e-4));
+    assert.deepEqual(o.traffic?.background, [194, 187, 96]);
+    assert.deepEqual(readOverlays(dir, now + 3 * 3600_000), {});
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

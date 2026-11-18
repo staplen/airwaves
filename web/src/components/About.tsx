@@ -30,6 +30,7 @@ export function About() {
             <li><b>NOAA Weather Radio</b>, its alert codes, and twice-daily <b>weather balloons</b>.</li>
             <li>Around the house: <b>tire-pressure sensors</b> of passing cars, utility meters and other 315/433/915 MHz sensors.</li>
             <li><b>HD Radio</b> song info and a 24-hour <b>spectrum</b> sweep.</li>
+            <li><b>Live traffic and weather radar</b> map overlays, broadcast as data alongside HD Radio stations.</li>
           </ul>
           <p>
             One dongle can only listen to one slice of the spectrum at a time, so a scheduler rotates through decoders on a loop of about 20 minutes. The strip at
