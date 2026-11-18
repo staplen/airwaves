@@ -3,7 +3,7 @@ import { createSocket } from 'node:dgram';
 import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, extname, join, normalize } from 'node:path';
 import { connect as mqttConnect } from 'mqtt';
-import type { Aircraft, AisFixed, Balloon, FeedItem, Overlays, RadioStation, SchedulerState, Snapshot, SourceStatus, SpectrumHeat, Vessel } from '../../shared/types.ts';
+import type { Aircraft, AisFixed, Balloon, FeedItem, Overlays, Pin, PinMetric, RadioStation, SchedulerState, SensorInfo, Snapshot, SourceStatus, SpectrumHeat, Vessel } from '../../shared/types.ts';
 import { AdsbSource } from './adsb.ts';
 import { AisDecoder, shipTypeName } from './ais.ts';
 import { ClipWatcher, type Clip } from './clips.ts';
@@ -81,6 +81,8 @@ const lastHeard = new Map<string, number>();
 const vessels = new Map<number, Vessel>();
 const aisFixed = new Map<number, AisFixed>();
 const sondes = new SondeTracker();
+const sensors = new Map<string, SensorInfo>(); // rtl_433 sensors by "<model>:<id>"
+let pins: Pin[] = []; // sensor readings shown with the top stats
 let scheduler: SchedulerState | undefined;
 let lastSummary = 0;
 let tpmsNewSinceSummary = 0;
@@ -148,6 +150,11 @@ function snapshot(): Snapshot {
       maxRangeNm: Math.max(0, ...withPos.map((a) => a.distNm ?? 0)),
       avgRssi: rssis.length ? rssis.reduce((a, b) => a + b, 0) / rssis.length : undefined,
     },
+    sensors: [...sensors.values()].filter((x) => now - x.lastSeen < 86_400_000).sort((a, b) => (localDay(b.lastSeen) === day ? b.heardToday : 0) - (localDay(a.lastSeen) === day ? a.heardToday : 0) || b.lastSeen - a.lastSeen).slice(0, 40),
+    pinned: pins.map((p) => {
+      const x = sensors.get(p.key);
+      return { ...p, value: x?.[p.metric], unit: p.metric === 'temperatureF' ? '°F' : '%', lastSeen: x?.lastSeen };
+    }),
   };
 }
 
@@ -162,7 +169,7 @@ function slotFailure(id: string, now: number): string | undefined {
 let publicOffset: Offset | undefined; // set in loadState
 const DISTANCE_TEXT = /,?\s*(?:at\s+)?[\d.]+\s*nm\b/g;
 function publicSnapshot(s: Snapshot): Snapshot {
-  return { ...s, home: s.home && publicOffset ? approxHome(s.home, publicOffset) : undefined, aircraft: s.aircraft.map((a) => ({ ...a, distNm: undefined })), stats: { ...s.stats, maxRangeNm: 0 } };
+  return { ...s, sensors: undefined, pinned: s.pinned?.map((p) => ({ ...p, key: '' })), home: s.home && publicOffset ? approxHome(s.home, publicOffset) : undefined, aircraft: s.aircraft.map((a) => ({ ...a, distNm: undefined })), stats: { ...s.stats, maxRangeNm: 0 } };
 }
 function publicItem(f: FeedItem): FeedItem {
   return f.kind === 'Aircraft' ? { ...f, body: f.body.replace(DISTANCE_TEXT, '') } : f;
@@ -361,8 +368,20 @@ function onRtl433(raw: string) {
     }
     return;
   }
-  // Other sensors: post the first reading of the day, then at most hourly per device.
+  // Other sensors: remember the latest reading (for pinning), post the first of the day, then at most hourly per device.
   const key = `${e.model}:${e.id}`;
+  const num = (k: string) => (typeof e.fields[k] === 'number' ? (e.fields[k] as number) : undefined);
+  const tc = num('temperature_C');
+  const prev = sensors.get(key);
+  sensors.set(key, {
+    key,
+    model: e.model.replace(/-/g, ' '),
+    lastSeen: e.ts,
+    heardToday: prev && localDay(prev.lastSeen) === day ? prev.heardToday + 1 : 1,
+    summary: describeSensor(e.fields),
+    temperatureF: num('temperature_F') ?? (tc !== undefined ? Math.round((tc * 1.8 + 32) * 10) / 10 : prev?.temperatureF),
+    humidity: num('humidity') ?? prev?.humidity,
+  });
   store.sight(day, 'sensor', key, e.ts);
   if (e.ts - (lastSensorPost.get(key) ?? 0) < 3600_000) return;
   lastSensorPost.set(key, e.ts);
@@ -483,6 +502,30 @@ const server = createServer((req, res) => {
     res.end(JSON.stringify(pub ? { snapshot: publicSnapshot(snap), feed: feed.map(publicItem) } : { snapshot: snap, feed }));
     return;
   }
+  if (p === '/api/pins' && req.method === 'POST') {
+    // Pin or unpin a sensor reading. Local network only: never from the public tunnel.
+    if (isPublic(req)) {
+      res.writeHead(403).end();
+      return;
+    }
+    let body = '';
+    req.on('data', (d) => (body += d).length > 4096 && req.destroy());
+    req.on('end', () => {
+      try {
+        const b = JSON.parse(body) as { key?: string; metric?: string; label?: string; remove?: boolean };
+        const metrics: PinMetric[] = ['temperatureF', 'humidity'];
+        if (typeof b.key !== 'string' || !metrics.includes(b.metric as PinMetric)) throw new Error('bad pin');
+        const metric = b.metric as PinMetric;
+        pins = pins.filter((x) => !(x.key === b.key && x.metric === metric));
+        if (!b.remove) pins.push({ key: b.key, metric, label: String(b.label ?? '').trim().slice(0, 40) || (metric === 'temperatureF' ? 'temperature' : 'humidity') });
+        store.setState('pins', pins);
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(pins));
+      } catch {
+        res.writeHead(400).end();
+      }
+    });
+    return;
+  }
   if (p === '/api/stream') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
     const pub = isPublic(req);
@@ -592,6 +635,7 @@ function saveState() {
   if (adsb.home) store.setState('home', adsb.home);
   store.setState('balloons', [...sondes.flights.values()]);
   store.setState('radio', [...radio.values()]);
+  store.setState('sensors', [...sensors.values()]);
 }
 function loadState() {
   for (const [k, v] of Object.entries(store.getState<Record<string, number>>('lastHeard') ?? {})) if (typeof v === 'number') lastHeard.set(k, v);
@@ -605,6 +649,8 @@ function loadState() {
     store.setState('publicOffset', publicOffset);
   }
   for (const r of store.getState<RadioStation[]>('radio') ?? []) if (r.updatedAt > day) radio.set(r.key, r);
+  for (const x of store.getState<SensorInfo[]>('sensors') ?? []) if (x.lastSeen > day) sensors.set(x.key, x);
+  pins = store.getState<Pin[]>('pins') ?? [];
   for (const b of store.getState<Balloon[]>('balloons') ?? []) if (b.lastSeen > day) sondes.flights.set(b.id, b);
 }
 loadState();

@@ -150,6 +150,33 @@ export interface Snapshot {
   totals: Totals;
   stats: { maxRangeNm: number; avgRssi?: number };
   publishedAt?: number; // epoch ms the public copy was uploaded (static site only)
+  sensors?: SensorInfo[]; // recent 315/433 MHz sensors, most-heard first (local view only)
+  pinned?: PinnedStat[]; // sensor readings pinned to the top stats
+}
+
+export type PinMetric = 'temperatureF' | 'humidity';
+
+/** A recurring sensor heard by rtl_433 (weather stations, thermometers, …). */
+export interface SensorInfo {
+  key: string; // "<model>:<id>"
+  model: string;
+  lastSeen: number;
+  heardToday: number;
+  summary: string; // e.g. "54°F · 61%"
+  temperatureF?: number;
+  humidity?: number;
+}
+
+export interface Pin {
+  key: string;
+  metric: PinMetric;
+  label: string;
+}
+
+export interface PinnedStat extends Pin {
+  value?: number;
+  unit: string;
+  lastSeen?: number;
 }
 
 /** Spectrum heatmap rows: strongest level per log-spaced bin (80–1150 MHz) per hour. */

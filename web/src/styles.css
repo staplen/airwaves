@@ -231,3 +231,15 @@ button.tog[aria-pressed='false'] { color: var(--muted); }
 .zoom-btn { width: 32px; height: 30px; border: none; background: transparent; color: var(--text); font: inherit; font-size: 16px; cursor: pointer; }
 .zoom-btn:disabled { color: #5b6372; cursor: default; }
 .zoom-btn + .zoom-btn { border-left: 1px solid var(--line-strong); }
+
+/* Sensor pinning (local only) */
+.pin-open { align-self: flex-end; margin-top: -6px; border: none; background: none; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; padding: 2px 0; }
+.pin-open:hover { color: var(--text); }
+.pin-list { display: flex; flex-direction: column; gap: 8px; max-height: 50vh; overflow-y: auto; }
+.pin-row { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 10px; background: var(--raised); border: 1px solid #262c36; }
+.pin-model { font-size: 13px; font-weight: 600; }
+.pin-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; flex: none; }
+.pin-action { display: flex; gap: 6px; align-items: center; }
+.pin-action input { width: 130px; min-height: 30px; padding: 0 8px; border-radius: 7px; border: 1px solid var(--line-strong); background: var(--card); color: var(--text); font: inherit; font-size: 12px; }
+.pin-btn { min-height: 30px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--line-strong); background: var(--card); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.pin-btn.on { background: var(--home); border-color: var(--home); color: var(--ground); }

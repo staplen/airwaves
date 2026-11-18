@@ -4,9 +4,11 @@ import { FreshnessRing } from './FreshnessRing.tsx';
 
 interface Tile {
   value?: number;
+  display?: string; // preformatted value, e.g. "54°F"
   label: string;
   color: string;
   sourceId: string;
+  heard?: number; // overrides the source's last-heard time (pinned sensors)
 }
 
 // The ring empties over one rotation loop (about 19 minutes): full = just heard, empty = a loop or more ago.
@@ -23,17 +25,25 @@ export function Totals({ snapshot }: { snapshot?: Snapshot }) {
     { value: t?.shipsToday, label: 'ships', color: 'var(--sea)', sourceId: 'ais' },
     { value: t?.tpmsPassersToday, label: `cars passed${t?.tpmsRegularsToday ? ` · ${t.tpmsRegularsToday} regulars` : ''}`, color: 'var(--home)', sourceId: 'ism' },
     { value: t?.metersToday, label: 'utility meters', color: 'var(--home)', sourceId: 'ism' },
+    ...(snapshot?.pinned ?? []).map((p) => ({
+      value: p.value,
+      display: p.value === undefined ? undefined : `${Math.round(p.value)}${p.unit}`,
+      label: p.label,
+      color: 'var(--home)',
+      sourceId: 'ism',
+      heard: p.lastSeen,
+    })),
   ];
   return (
     <section className="totals" aria-label="Today so far">
       {tiles.map((tile) => {
         const src = source(tile.sourceId);
         const off = !src?.running && !tile.value;
-        const heard = src?.lastHeard;
-        const live = snapshot?.rotation.current?.sourceId === tile.sourceId;
+        const heard = tile.heard ?? src?.lastHeard;
+        const live = !tile.heard && snapshot?.rotation.current?.sourceId === tile.sourceId;
         return (
           <div key={tile.label} className="card total">
-            <span className="v" style={{ color: off ? 'var(--muted)' : tile.color }}>{off || tile.value === undefined ? '—' : tile.value.toLocaleString('en-US')}</span>
+            <span className="v" style={{ color: off ? 'var(--muted)' : tile.color }}>{off || tile.value === undefined ? '—' : tile.display ?? tile.value.toLocaleString('en-US')}</span>
             <span className="k">{tile.label}</span>
             <span className="fresh">
               {off ? (

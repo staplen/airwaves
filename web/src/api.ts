@@ -14,7 +14,7 @@ function detectStatic(): boolean {
 
 export const isStatic = detectStatic();
 
-export type ApiKind = 'snapshot' | 'feed' | 'spectrum' | 'overlays' | 'stream';
+export type ApiKind = 'snapshot' | 'feed' | 'spectrum' | 'overlays' | 'stream' | 'pins';
 
 /** URL for a data endpoint: `/api/<kind>` live, `data/<kind>.json` (relative) in the static copy. */
 export function apiUrl(kind: ApiKind): string {
