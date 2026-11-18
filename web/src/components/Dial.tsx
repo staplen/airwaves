@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Snapshot, SpectrumHeat } from '../../../shared/types.ts';
+import { apiUrl } from '../api.ts';
 import { BANDS, FAMILY_COLOR, dialX } from '../bands.ts';
 
 const TICKS = [100, 200, 300, 500, 700, 1000];
@@ -14,7 +15,7 @@ function useSpectrum(): SpectrumHeat | undefined {
   useEffect(() => {
     let alive = true;
     const load = () =>
-      fetch('/api/spectrum')
+      fetch(apiUrl('spectrum'))
         .then((r) => (r.ok ? (r.json() as Promise<SpectrumHeat>) : undefined))
         .then((h) => alive && h && setHeat(h))
         .catch(() => {});

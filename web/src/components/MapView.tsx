@@ -5,10 +5,12 @@ import { Map as MlMap, setWorkerUrl, type GeoJSONSource } from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { Aircraft, AisFixed, Balloon, Home, Overlays, Snapshot, Vessel } from '../../../shared/types.ts';
+import { apiUrl, isStatic } from '../api.ts';
 import { ago } from '../live.ts';
 
 const STYLE = 'https://tiles.openfreemap.org/styles/dark';
-setWorkerUrl(workerUrl);
+// Absolute, because the build uses a relative base and the worker must resolve against the page.
+setWorkerUrl(new URL(workerUrl, document.baseURI).href);
 const RINGS_NM = [10, 20, 30];
 const STALE_S = 30;
 
@@ -231,7 +233,7 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
   useEffect(() => {
     let alive = true;
     const load = () =>
-      fetch('/api/overlays')
+      fetch(apiUrl('overlays') + (isStatic ? `?t=${Date.now()}` : ''))
         .then((r) => (r.ok ? (r.json() as Promise<Overlays>) : {}))
         .catch(() => ({}) as Overlays)
         .then((o) => alive && setOverlays(o));

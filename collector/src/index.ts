@@ -11,6 +11,7 @@ import { parseSame } from './eas.ts';
 import { ingestSpectrum, purgeOldFiles, SPECTRUM_BINS } from './housekeeping.ts';
 import { ingestHdRadio } from './hdradio.ts';
 import { readOverlays } from './overlays.ts';
+import { Publisher } from './publisher.ts';
 import { SondeTracker } from './sonde.ts';
 import { describeSensor, parseRtl433 } from './rtl433.ts';
 import { Store, localDay } from './store.ts';
@@ -409,6 +410,18 @@ function onClip(c: Clip) {
 }
 if (CLIPS_ROOT) new ClipWatcher({ atc: join(CLIPS_ROOT, 'atc'), noaa: join(CLIPS_ROOT, 'noaa') }, onClip).start();
 
+function currentOverlays(): Overlays {
+  try {
+    return readOverlays(join(HD_DIR, 'maps'), Date.now());
+  } catch {
+    return {};
+  }
+}
+
+function currentSpectrum(): SpectrumHeat {
+  return { bins: SPECTRUM_BINS, rows: store.spectrumSince(Math.floor(Date.now() / 3600_000) - 23, SPECTRUM_BINS) };
+}
+
 // ---- HTTP -------------------------------------------------------------------------------------
 const TYPES: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.json': 'application/json' };
 
@@ -460,16 +473,12 @@ const server = createServer((req, res) => {
     return;
   }
   if (p === '/api/spectrum') {
-    const heat: SpectrumHeat = { bins: SPECTRUM_BINS, rows: store.spectrumSince(Math.floor(Date.now() / 3600_000) - 23, SPECTRUM_BINS) };
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(heat));
+    res.end(JSON.stringify(currentSpectrum()));
     return;
   }
   if (p === '/api/overlays') {
-    let o: Overlays = {};
-    try {
-      o = readOverlays(join(HD_DIR, 'maps'), Date.now());
-    } catch {}
+    const o = currentOverlays();
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(o));
     return;
   }
@@ -571,6 +580,24 @@ setInterval(() => {
   saveState();
   void housekeeping();
 }, 10 * 60_000);
+
+// Public, read-only copy of the dashboard on a web host (always the public view).
+if (env.PUBLISH_HOST) {
+  new Publisher({
+    host: env.PUBLISH_HOST,
+    port: Number(env.PUBLISH_PORT ?? 22),
+    user: env.PUBLISH_USER,
+    pass: env.PUBLISH_PASS,
+    dir: env.PUBLISH_DIR || '/',
+    everySec: Number(env.PUBLISH_EVERY_SEC ?? 60) || 60,
+    webDir: WEB_DIR,
+    roots: { clips: CLIPS_ROOT, art: ART_DIR, maps: join(HD_DIR, 'maps') },
+    snapshot: () => publicSnapshot(snapshot()),
+    feed: (n) => store.recentFeed(n).map(publicItem),
+    spectrum: currentSpectrum,
+    overlays: currentOverlays,
+  }).start();
+}
 
 await adsb.loadReceiver().catch((e) => console.warn('receiver.json unavailable:', e.message));
 await tick();

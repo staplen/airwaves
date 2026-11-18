@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { FeedItem, Snapshot } from '../../shared/types.ts';
+import { apiUrl, isStatic } from './api.ts';
+
+const STATIC_POLL_MS = 30_000;
 
 export interface Live {
   snapshot?: Snapshot;
@@ -7,7 +10,9 @@ export interface Live {
   connected: boolean;
 }
 
-/** Loads the initial state, then follows the collector's event stream. */
+const newestFirst = (a: FeedItem, b: FeedItem) => b.ts - a.ts || b.id - a.id;
+
+/** Loads the initial state, then follows the collector's event stream (or polls the published JSON files). */
 export function useLive(): Live {
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [feed, setFeed] = useState<FeedItem[]>([]);
@@ -15,7 +20,34 @@ export function useLive(): Live {
 
   useEffect(() => {
     let closed = false;
-    fetch('/api/snapshot')
+    if (isStatic) {
+      const poll = async () => {
+        const bust = `?t=${Date.now()}`;
+        try {
+          const [snap, items] = await Promise.all([
+            fetch(apiUrl('snapshot') + bust).then((r) => (r.ok ? (r.json() as Promise<Snapshot>) : Promise.reject(new Error(String(r.status))))),
+            fetch(apiUrl('feed') + bust).then((r) => (r.ok ? (r.json() as Promise<FeedItem[]>) : Promise.reject(new Error(String(r.status))))),
+          ]);
+          if (closed) return;
+          setSnapshot(snap);
+          setFeed((f) => {
+            const byId = new Map(f.map((x) => [x.id, x]));
+            for (const i of items) byId.set(i.id, i);
+            return [...byId.values()].sort(newestFirst).slice(0, 200);
+          });
+          setConnected(true);
+        } catch {
+          if (!closed) setConnected(false);
+        }
+      };
+      void poll();
+      const t = setInterval(poll, STATIC_POLL_MS);
+      return () => {
+        closed = true;
+        clearInterval(t);
+      };
+    }
+    fetch(apiUrl('snapshot'))
       .then((r) => r.json())
       .then((d: { snapshot: Snapshot; feed: FeedItem[] }) => {
         if (closed) return;
@@ -24,7 +56,7 @@ export function useLive(): Live {
       })
       .catch(() => {});
 
-    const es = new EventSource('/api/stream');
+    const es = new EventSource(apiUrl('stream'));
     es.onopen = () => setConnected(true);
     es.onerror = () => setConnected(false);
     es.addEventListener('snapshot', (e) => setSnapshot(JSON.parse((e as MessageEvent).data)));

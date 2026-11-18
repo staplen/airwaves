@@ -6,8 +6,10 @@ import { MapView } from './components/MapView.tsx';
 import { RadioNow } from './components/RadioNow.tsx';
 import { RotationStrip } from './components/RotationStrip.tsx';
 import { Totals } from './components/Totals.tsx';
-import { useLive } from './live.ts';
+import { isStatic } from './api.ts';
+import { ago, useLive } from './live.ts';
 
+const STALE_MS = 3 * 60_000;
 const DIAL_KEY = 'airwaves.dialOpen';
 
 function readOpen(): boolean {
@@ -20,6 +22,7 @@ function readOpen(): boolean {
 
 export function App() {
   const { snapshot, feed, connected } = useLive();
+  const stale = isStatic && snapshot?.publishedAt !== undefined && Date.now() - snapshot.publishedAt > STALE_MS;
   const [dialOpen, setDialOpen] = useState(readOpen);
 
   const toggle = () =>
@@ -41,6 +44,7 @@ export function App() {
           <path d="M8 8 A8.5 8.5 0 0 0 8 20 M20 8 A8.5 8.5 0 0 1 20 20 M4 4 A14 14 0 0 0 4 24 M24 4 A14 14 0 0 1 24 24" fill="none" stroke="#e6e9ee" strokeWidth="2" strokeLinecap="round" />
         </svg>
         <RotationStrip snapshot={snapshot} expanded={dialOpen} onToggle={toggle} />
+        {stale && <span className="muted top-time">Last updated {ago(snapshot.publishedAt, Date.now())}</span>}
         {!connected && <span className="muted top-time">Reconnecting…</span>}
         <About />
       </header>

@@ -147,6 +147,7 @@ export interface Snapshot {
   radio: RadioStation[];
   totals: Totals;
   stats: { maxRangeNm: number; avgRssi?: number };
+  publishedAt?: number; // epoch ms the public copy was uploaded (static site only)
 }
 
 /** Spectrum heatmap rows: strongest level per log-spaced bin (80–1150 MHz) per hour. */
