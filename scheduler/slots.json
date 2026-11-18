@@ -50,6 +50,14 @@
               "-F", "mqtt://127.0.0.1:1883,user=${MQTT_USER},pass=${MQTT_PASS},retain=0,events=airwaves/rtl_433"]
     },
     {
+      "id": "trains", "name": "Trains (probe)", "freqMhz": 457.9375, "minutes": 3,
+      "comment": "Listening test for end-of-train devices: raw 12 kHz FM audio; the collector keeps any 1200-baud bursts in trains/review/.",
+      "image": "ghcr.io/sdr-enthusiasts/docker-adsb-ultrafeeder:latest-build-845",
+      "entrypoint": ["rtl_fm"],
+      "cmd": ["-f", "457.9375M", "-M", "fm", "-s", "12k", "-g", "44.5", "/out/eot_${TS}.raw"],
+      "binds": ["/mnt/data/supervisor/share/airwaves/trains:/out"]
+    },
+    {
       "id": "noaa", "name": "NOAA", "freqMhz": 162.45, "minutes": 1,
       "image": "airwaves-noaa:local",
       "binds": ["/mnt/data/supervisor/media/airwaves/noaa:/out"],

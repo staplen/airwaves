@@ -10,6 +10,7 @@ import { ClipWatcher, type Clip } from './clips.ts';
 import { parseSame } from './eas.ts';
 import { ingestSpectrum, purgeOldFiles, SPECTRUM_BINS } from './housekeeping.ts';
 import { ingestHdRadio } from './hdradio.ts';
+import { ingestTrains } from './trains.ts';
 import { approxHome, randomOffset, type Offset } from './privacy.ts';
 import { readOverlays } from './overlays.ts';
 import { Publisher } from './publisher.ts';
@@ -30,6 +31,7 @@ const VDL2_UDP_PORT = Number(env.VDL2_UDP_PORT ?? 4101);
 const CLIPS_ROOT = env.CLIPS_ROOT; // folder holding atc/, noaa/ and radio/ clip folders
 // rtl_power sweeps land here; default is a "spectrum" folder next to DATA_DIR (/airwaves/spectrum on the Pi).
 const SPECTRUM_DIR = env.SPECTRUM_DIR ?? join(dirname(env.DATA_DIR ?? 'data'), 'spectrum');
+const TRAINS_DIR = env.TRAINS_DIR ?? join(dirname(env.DATA_DIR ?? 'data'), 'trains'); // train probe recordings + review/
 const HD_DIR = env.HD_DIR ?? join(dirname(env.DATA_DIR ?? 'data'), 'hdradio'); // nrsc5 logs + album art
 const ART_DIR = join(HD_DIR, 'art');
 const SONDE_UDP_PORT = Number(env.SONDE_UDP_PORT ?? 55673);
@@ -534,6 +536,7 @@ async function housekeeping() {
 async function ingestFiles() {
   const now = Date.now();
   if (await ingestSpectrum(SPECTRUM_DIR, store)) heard('spectrum', now);
+  await ingestTrains(TRAINS_DIR);
   mkdirSync(ART_DIR, { recursive: true });
   const radioClips = CLIPS_ROOT ? join(CLIPS_ROOT, 'radio') : undefined;
   for (const c of await ingestHdRadio(HD_DIR, ART_DIR, radioClips)) {
