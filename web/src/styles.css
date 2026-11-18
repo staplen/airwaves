@@ -264,3 +264,8 @@ button.ftoken { font: inherit; font-size: 12px; cursor: pointer; padding: 3px 10
 .nav-card { display: flex; flex-direction: column; gap: 4px; }
 .nav-card b { color: var(--text); font-size: 13px; }
 .nav-card .muted { font-size: 11px; }
+
+/* Loop segments that filter the feed */
+.seg-click { cursor: pointer; }
+.seg-click:hover { filter: brightness(1.35); }
+.seg-click:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }

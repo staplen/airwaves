@@ -1,6 +1,7 @@
 import { dur, slotName } from '../live.ts';
 import type { Snapshot } from '../../../shared/types.ts';
 import { FAMILY_COLOR } from '../bands.ts';
+import { SOURCE_TYPES, showOnlySource } from '../feedFilter.ts';
 
 function remaining(endsAt: number, now: number): string {
   const s = Math.max(0, Math.round((endsAt - now) / 1000));
@@ -11,6 +12,24 @@ function remaining(endsAt: number, now: number): string {
  * Compact header strip: what the radio is tuned to now, a countdown, and a bar of the
  * next few slots (width ∝ minutes, coloured by signal family). The full dial opens below.
  */
+/** Click / keyboard props that make a loop segment filter the feed to that source's types. */
+function segAction(sourceId: string, name: string) {
+  if (!SOURCE_TYPES[sourceId]) return {};
+  return {
+    role: 'button',
+    tabIndex: 0,
+    'aria-label': `Show only ${name} in the feed`,
+    onClick: () => showOnlySource(sourceId),
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        showOnlySource(sourceId);
+      }
+    },
+  };
+}
+const clickHint = (sourceId: string) => (SOURCE_TYPES[sourceId] ? ' · click to show only these in the feed' : '');
+
 export function RotationStrip({ snapshot, expanded, onToggle }: { snapshot?: Snapshot; expanded: boolean; onToggle: () => void }) {
   const rot = snapshot?.rotation;
   const cur = rot?.current;
@@ -57,10 +76,12 @@ export function RotationStrip({ snapshot, expanded, onToggle }: { snapshot?: Sna
           loop.map((s, i) => {
             const so = src(s.sourceId);
             const color = so ? FAMILY_COLOR[so.family] : 'var(--muted)';
-            const title = `${so?.name ?? slotName(s.sourceId)} · ${dur(s.minutes)}`;
+            const name = so?.name ?? slotName(s.sourceId);
+            const title = `${name} · ${dur(s.minutes)}${clickHint(s.sourceId)}`;
+            const act = segAction(s.sourceId, name);
             if (i === runIdx) {
               return (
-                <div key={i} className={switching ? 'seg seg-now seg-switching' : 'seg seg-now'} style={{ flexGrow: s.minutes, borderColor: curColor }} title={title}>
+                <div key={i} className={`${switching ? 'seg seg-now seg-switching' : 'seg seg-now'}${act.role ? ' seg-click' : ''}`} style={{ flexGrow: s.minutes, borderColor: curColor }} title={title} {...act}>
                   <div className="seg-fill" style={{ width: `${progress * 100}%`, background: curColor }} />
                   <span className="seg-label" style={{ color: curColor, position: 'relative' }}>{so?.name ?? slotName(s.sourceId)}</span>
                 </div>
@@ -68,7 +89,7 @@ export function RotationStrip({ snapshot, expanded, onToggle }: { snapshot?: Sna
             }
             const nextUp = switching && i === (runIdx + 1) % loop.length;
             return (
-              <div key={i} className={nextUp ? 'seg seg-next' : 'seg'} style={{ flexGrow: s.minutes, background: `${color}33`, color, opacity: i < runIdx ? 0.55 : 1 }} title={title}>
+              <div key={i} className={`${nextUp ? 'seg seg-next' : 'seg'}${act.role ? ' seg-click' : ''}`} style={{ flexGrow: s.minutes, background: `${color}33`, color, opacity: i < runIdx ? 0.55 : 1 }} title={title} {...act}>
                 <span className="seg-label">{so?.name ?? slotName(s.sourceId)}</span>
               </div>
             );
@@ -82,7 +103,7 @@ export function RotationStrip({ snapshot, expanded, onToggle }: { snapshot?: Sna
           const so = src(s.id);
           const color = so ? FAMILY_COLOR[so.family] : 'var(--muted)';
           return (
-            <div key={i} className="seg" style={{ flexGrow: s.minutes, background: `${color}33`, color }} title={`${so?.name ?? slotName(s.id)} · ${dur(s.minutes)}`}>
+            <div key={i} className={SOURCE_TYPES[s.id] ? 'seg seg-click' : 'seg'} style={{ flexGrow: s.minutes, background: `${color}33`, color }} title={`${so?.name ?? slotName(s.id)} · ${dur(s.minutes)}${clickHint(s.id)}`} {...segAction(s.id, so?.name ?? slotName(s.id))}>
               <span className="seg-label">{so?.name ?? slotName(s.id)}</span>
             </div>
           );

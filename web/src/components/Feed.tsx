@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Family, FeedItem } from '../../../shared/types.ts';
 import { FAMILY_COLOR, FAMILY_LABEL } from '../bands.ts';
 import { ClipPlayer } from './ClipPlayer.tsx';
+import { onShowOnly } from '../feedFilter.ts';
 
 const PLACEHOLDER = /^(Transcript coming soon|Latest 60-second clip)/;
 const CLIP_RETENTION_MS = 24 * 3600_000; // matches the collector's audio purge
@@ -113,6 +114,18 @@ export function Feed({ items }: { items: FeedItem[] }) {
   }, [words, hidden, items]);
 
   useEffect(() => setActive(-1), [query]);
+  // The header loop strip can ask for "only these types" (e.g. clicking the ATC segment).
+  const section = useRef<HTMLElement>(null);
+  useEffect(
+    () =>
+      onShowOnly((types) => {
+        setHidden(TYPES.map((t) => t.id).filter((id) => !types.includes(id)));
+        setQuery('');
+        section.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
   useEffect(() => {
     if (!open && !typesOpen) return;
     const onDown = (e: MouseEvent) => {
@@ -162,7 +175,7 @@ export function Feed({ items }: { items: FeedItem[] }) {
   const menuOpen = open && !typesOpen && opts.length > 0;
 
   return (
-    <section className="feed" aria-label="Feed">
+    <section className="feed" aria-label="Feed" ref={section}>
       <div className="fsearch" ref={root}>
         <div className="fsearch-box" onMouseDown={(e) => { if (e.target === e.currentTarget) { e.preventDefault(); input.current?.focus(); } }}>
           <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" style={{ flex: 'none' }}><circle cx="6" cy="6" r="4.5" fill="none" stroke="var(--muted)" strokeWidth="1.5" /><path d="M9.5 9.5 L13 13" stroke="var(--muted)" strokeWidth="1.5" strokeLinecap="round" /></svg>
