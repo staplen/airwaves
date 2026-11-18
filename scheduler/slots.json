@@ -12,10 +12,10 @@
       "binds": ["/mnt/data/supervisor/share/airwaves/readsb:/out"]
     },
     {
-      "id": "atc", "name": "ATC", "freqMhz": 119.25, "minutes": 0.5,
+      "id": "atc", "name": "ATC", "freqMhz": 119.55, "minutes": 0.5,
       "image": "ghcr.io/rtl-airband/rtlsdr-airband:v7.0.1",
       "binds": [
-        "/mnt/data/supervisor/share/airwaves/rtl_airband.conf:/app/rtl_airband.conf:ro",
+        "/mnt/data/supervisor/share/airwaves/app/deploy/atc/rtl_airband.conf:/app/rtl_airband.conf:ro",
         "/mnt/data/supervisor/media/airwaves/atc:/recordings"
       ],
       "extendIfActive": { "withinSec": 30, "maxExtraMinutes": 2 }

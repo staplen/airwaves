@@ -53,7 +53,7 @@ const FORCE_PUBLIC = env.PUBLIC === '1';
 // Slot ids match the scheduler's slots.json.
 const SOURCES: Omit<SourceStatus, 'lastHeard' | 'running'>[] = [
   { id: 'adsb', name: 'ADS-B', family: 'air', freqMhz: 1090 },
-  { id: 'atc', name: 'ATC', family: 'air', freqMhz: 119.25 },
+  { id: 'atc', name: 'ATC', family: 'air', freqMhz: 119.55 },
   { id: 'ais', name: 'Ships', family: 'sea', freqMhz: 162.0 },
   { id: 'vdl2', name: 'Datalink', family: 'air', freqMhz: 136.8 },
   { id: 'ism', name: 'Sensors', family: 'home', freqMhz: 315 },
@@ -69,6 +69,11 @@ const ATC_NAMES: Record<string, { name: string; freq: string }> = {
   DEP_TYSON: { name: 'Potomac Departure', freq: '118.950' },
   APP_LURAY: { name: 'Potomac Approach', freq: '118.675' },
   APP_OJAAY: { name: 'Potomac Approach', freq: '119.850' },
+  APP_BWI: { name: 'Potomac Approach (BWI)', freq: '119.000' },
+  BWI_TWR: { name: 'BWI Tower', freq: '119.400' },
+  IAD_TWR_E: { name: 'IAD Tower', freq: '120.100' },
+  IAD_TWR_C: { name: 'IAD Tower', freq: '120.250' },
+  APP_IAD_W: { name: 'Potomac Approach (IAD)', freq: '120.450' },
 };
 
 const startedAt = Date.now();
