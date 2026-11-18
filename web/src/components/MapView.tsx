@@ -89,25 +89,29 @@ function balloonsFC(list: Balloon[]): FC {
 const OVERLAY_REFRESH_MS = 5 * 60_000;
 type Layer = 'live' | 'traffic' | 'weather';
 
-/** Traffic tiles laid out in their broadcast grid (row 1 = north); missing tiles stay blank. */
-function TrafficGrid({ t }: { t: NonNullable<Overlays['traffic']> }) {
-  const placed = t.tiles.filter((x) => x.row && x.col);
-  if (!t.rows || !t.cols || placed.length !== t.tiles.length) {
-    // Older collector: no grid info, so just show what we have side by side.
-    return <div className="layer-row">{t.tiles.map((x) => <img key={x.url} src={x.url} alt="" draggable={false} />)}</div>;
-  }
-  const bg = t.background ? `rgb(${t.background.join(',')})` : 'var(--raised)';
+const TILE_PX = 200; // broadcast traffic tiles are 200 px squares
+
+/** Traffic tiles laid out in their broadcast grid (row 1 = north) at no more than their own size; missing tiles leave gaps. */
+function TrafficGrid({ t, zoom }: { t: NonNullable<Overlays['traffic']>; zoom: number }) {
+  // Row/col come from the overlay index, or from the tile name (TMT_<map>_<row>_<col>_...).
+  const placed = t.tiles.flatMap((x) => {
+    const m = x.url.match(/TMT_[^_]+_(\d+)_(\d+)_/);
+    const row = x.row ?? (m ? Number(m[1]) : undefined);
+    const col = x.col ?? (m ? Number(m[2]) : undefined);
+    return row && col ? [{ url: x.url, row, col }] : [];
+  });
+  const rows = Math.max(t.rows ?? 3, ...placed.map((x) => x.row));
+  const cols = Math.max(t.cols ?? 3, ...placed.map((x) => x.col));
+  const tile = `calc(min(${TILE_PX}px, (100cqw - 32px) / ${cols}, (100cqh - 64px) / ${rows}) * ${zoom})`;
   return (
-    <div className="traffic-grid" style={{ gridTemplateColumns: `repeat(${t.cols}, 1fr)`, background: bg }}>
+    <div className="traffic-grid" style={{ gridTemplateColumns: `repeat(${cols}, ${tile})`, gridTemplateRows: `repeat(${rows}, ${tile})` }}>
       {placed.map((x) => <img key={x.url} src={x.url} alt="" draggable={false} style={{ gridRow: x.row, gridColumn: x.col }} />)}
-      {/* keeps the full grid's shape even when the last row or column is missing */}
-      <i style={{ gridRow: t.rows, gridColumn: t.cols, aspectRatio: '1' }} />
     </div>
   );
 }
 
 /** Received images shown untouched, filling the card; zoom with the buttons, pan by scrolling or dragging. */
-function ImagePanel({ children, caption }: { children: React.ReactNode; caption: string }) {
+function ImagePanel({ render, caption }: { render: (zoom: number) => React.ReactNode; caption: string }) {
   const [zoom, setZoom] = useState(1);
   const box = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; y: number; l: number; t: number }>(null);
@@ -120,7 +124,7 @@ function ImagePanel({ children, caption }: { children: React.ReactNode; caption:
         onPointerMove={(e) => { const d = drag.current; if (!d) return; box.current!.scrollLeft = d.l - (e.clientX - d.x); box.current!.scrollTop = d.t - (e.clientY - d.y); }}
         onPointerUp={() => (drag.current = null)}
       >
-        <div className="layer-img" style={{ width: `${zoom * 100}%` }}>{children}</div>
+        {render(zoom)}
       </div>
       <div className="overlay-b">
         <span className="tog muted" style={{ fontSize: 11 }}>{caption}</span>
@@ -313,17 +317,20 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
       )}
       {layer === 'traffic' &&
         (overlays.traffic ? (
-          <ImagePanel caption={`Traffic map from HD Radio · received ${ago(overlays.traffic.updatedAt, now)}${overlays.traffic.rows && overlays.traffic.cols && overlays.traffic.tiles.length < overlays.traffic.rows * overlays.traffic.cols ? ` · ${overlays.traffic.tiles.length} of ${overlays.traffic.rows * overlays.traffic.cols} tiles so far` : ''}`}>
-            <TrafficGrid t={overlays.traffic} />
-          </ImagePanel>
+          <ImagePanel caption={`Traffic map from HD Radio · received ${ago(overlays.traffic.updatedAt, now)}${overlays.traffic.tiles.length < (overlays.traffic.rows ?? 3) * (overlays.traffic.cols ?? 3) ? ` · ${overlays.traffic.tiles.length} of ${(overlays.traffic.rows ?? 3) * (overlays.traffic.cols ?? 3)} tiles so far` : ''}`} render={(z) => <TrafficGrid t={overlays.traffic!} zoom={z} />} />
         ) : (
           <div className="layer-panel layer-empty"><b>No traffic map received yet</b><span className="muted">Traffic maps come in over HD Radio during the HD Radio slot and are kept for 90 minutes.</span></div>
         ))}
       {layer === 'weather' &&
         (overlays.radar ? (
-          <ImagePanel caption={`Radar from HD Radio · received ${ago(overlays.radar.updatedAt, now)}`}>
-            <img src={overlays.radar.url} alt="Weather radar image as broadcast" draggable={false} />
-          </ImagePanel>
+          <ImagePanel
+            caption={`Radar from HD Radio · received ${ago(overlays.radar.updatedAt, now)}`}
+            render={(z) => (
+              <div className="layer-img" style={{ width: `${z * 100}%` }}>
+                <img src={overlays.radar!.url} alt="Weather radar image as broadcast" draggable={false} />
+              </div>
+            )}
+          />
         ) : (
           <div className="layer-panel layer-empty"><b>No radar image received yet</b><span className="muted">Radar comes in over HD Radio with the traffic maps. It will show here as broadcast.</span></div>
         ))}

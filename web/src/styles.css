@@ -221,8 +221,9 @@ button.tog[aria-pressed='false'] { color: var(--muted); }
 .layer-img { margin: auto; flex: none; max-width: none; }
 .layer-img img { display: block; width: 100%; height: auto; user-select: none; }
 .layer-row { display: flex; }
-.traffic-grid { display: grid; }
-.traffic-grid img { width: 100%; height: auto; }
+.layer-scroll { container-type: size; }
+.traffic-grid { display: grid; gap: 0; margin: auto; outline: 1px dashed var(--line-strong); }
+.traffic-grid img { width: 100%; height: 100%; display: block; }
 .layer-row img { flex: 1; min-width: 0; width: auto; }
 .layer-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 0 40px; text-align: center; font-size: 13px; }
 .zoom-btn { width: 32px; height: 30px; border: none; background: transparent; color: var(--text); font: inherit; font-size: 16px; cursor: pointer; }
