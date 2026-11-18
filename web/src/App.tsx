@@ -6,7 +6,7 @@ import { MapView } from './components/MapView.tsx';
 import { LoopBand } from './components/LoopBand.tsx';
 import { SensorPins } from './components/SensorPins.tsx';
 import { isStatic } from './api.ts';
-import { ago, useLive } from './live.ts';
+import { ago, predictRotation, useLive } from './live.ts';
 
 const STALE_MS = 3 * 60_000;
 const DIAL_KEY = 'airwaves.dialOpen';
@@ -28,7 +28,12 @@ export function App() {
     const t = setInterval(() => setTick(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
-  const view = useMemo(() => (snapshot ? { ...snapshot, now: Math.max(snapshot.now, tick) } : undefined), [snapshot, tick]);
+  const view = useMemo(() => {
+    if (!snapshot) return undefined;
+    const now = Math.max(snapshot.now, tick);
+    const freqOf = (id: string) => snapshot.sources.find((x) => x.id === id)?.freqMhz;
+    return { ...snapshot, now, rotation: predictRotation(snapshot.rotation, now, freqOf) };
+  }, [snapshot, tick]);
   const stale = isStatic && snapshot?.publishedAt !== undefined && Date.now() - snapshot.publishedAt > STALE_MS;
   const [dialOpen, setDialOpen] = useState(readOpen);
 

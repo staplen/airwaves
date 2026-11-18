@@ -160,7 +160,7 @@ function publish(loop: Slot[], index: number, since: number, endsAt: number) {
     upNext,
     slots: [...new Set(allSlots.map((x) => x.id))],
     failures,
-    loop: loop.map((x) => ({ slotId: x.id, minutes: x.minutes })),
+    loop: loop.map((x) => ({ slotId: x.id, minutes: x.minutes, freqMhz: x.freqMhz })),
     index,
     loopMinutes: loop.reduce((a, x) => a + x.minutes, 0),
     updatedAt: Date.now(),
@@ -203,7 +203,7 @@ async function stopSlot(s: Slot) {
   if (DRY_RUN) return log(`[dry run] stop ${s.id}`);
   if (s.existing) return docker.stop(s.existing, 10);
   const name = containerName(s);
-  await docker.stop(name);
+  await docker.stop(name, 3); // every decoder exits within a second or two of SIGTERM; don't idle the dongle longer
   await docker.remove(name); // the dongle is free only once the container is gone
   await docker.waitGone(name);
 }

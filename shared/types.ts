@@ -79,7 +79,7 @@ export interface SchedulerState {
   upNext: { slotId: string; minutes: number }[];
   slots?: string[]; // every slot id in the loop
   failures?: Record<string, { at: number; reason: string }>; // last failure per slot
-  loop?: { slotId: string; minutes: number }[]; // this pass's slots in order (ids can repeat)
+  loop?: { slotId: string; minutes: number; freqMhz?: number }[]; // this pass's slots in order (ids can repeat)
   index?: number; // position of the running slot in `loop`
   loopMinutes: number;
   updatedAt: number;
@@ -91,7 +91,7 @@ export interface Rotation {
   current?: { sourceId: string; freqMhz: number; since: number; endsAt?: number };
   upNext: { sourceId: string; minutes: number }[];
   /** The whole current pass in order; `index` is the running entry. */
-  loop?: { sourceId: string; minutes: number }[];
+  loop?: { sourceId: string; minutes: number; freqMhz?: number }[];
   index?: number;
   /** Every slot id the scheduler knows, in loop order (windowed and hourly ones included). */
   slots?: string[];
@@ -101,7 +101,9 @@ export interface Rotation {
 export interface SlotStat {
   value?: string; // "387", "54°F"; absent when there's nothing to count
   label: string; // "aircraft today"
+  short?: string; // label for an inactive tile: "aircraft"
   detail?: string; // "14 overhead · highest FL410"
+  brief?: string; // detail for an inactive tile: "14 up now"
 }
 
 export interface FeedItem {

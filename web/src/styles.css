@@ -168,6 +168,8 @@ button.tog[aria-pressed='false'] { color: var(--muted); }
 .switching .dots i:nth-child(2) { animation-delay: .2s; }
 .switching .dots i:nth-child(3) { animation-delay: .4s; }
 @keyframes sw-dot { 0%, 100% { opacity: .2; } 40% { opacity: 1; } }
+@keyframes sw-shimmer { to { transform: translateX(100%); } }
+@keyframes sw-pulse { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.6); } }
 @media (prefers-reduced-motion: reduce) {
   .switching .dots i { opacity: 1; }
 }
@@ -260,6 +262,10 @@ button.ftoken { font: inherit; font-size: 12px; cursor: pointer; padding: 3px 10
 @media (max-width: 560px) {
   .lt { flex-basis: calc(50% - 8px); }
 }
+/* Switching: shimmer across the finishing tile, the next one pulses */
+.lt.switching-out::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, #ffffff1f, transparent); transform: translateX(-100%); animation: sw-shimmer 1.4s ease-in-out infinite; pointer-events: none; }
+.lt.next { animation: sw-pulse 1.2s ease-in-out infinite; border-color: var(--c); }
 @media (prefers-reduced-motion: reduce) {
   .lt, .lt-val .v { transition: none; }
+  .lt.switching-out::after, .lt.next { animation: none; }
 }

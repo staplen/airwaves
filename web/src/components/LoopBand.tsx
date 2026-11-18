@@ -1,7 +1,7 @@
 import type { Snapshot } from '../../../shared/types.ts';
 import { FAMILY_COLOR } from '../bands.ts';
 import { SOURCE_TYPES, showOnlySource } from '../feedFilter.ts';
-import { slotName } from '../live.ts';
+import { SWITCH_GAP_MS, slotName } from '../live.ts';
 
 const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.max(0, Math.round(s % 60))).padStart(2, '0')}`;
 
@@ -18,21 +18,11 @@ export function LoopBand({ snapshot }: { snapshot?: Snapshot }) {
   const idx = rot?.index ?? -1;
   const ids = rot?.slots?.length ? rot.slots : [...new Set(loop.map((l) => l.sourceId))];
   if (ids.length === 0 && cur) ids.push(cur.sourceId);
-  const switching = rot?.mode === 'rotating' && !!cur?.endsAt && now >= cur.endsAt;
+  // Between one slot ending and the next starting: shimmer on the finishing tile, pulse on the next.
+  const switching = rot?.mode === 'rotating' && !!cur?.endsAt && now >= cur.endsAt && now < cur.endsAt + SWITCH_GAP_MS * 2;
+  const nextId = loop.length && idx >= 0 ? loop[(idx + 1) % loop.length]?.sourceId : undefined;
   const left = cur?.endsAt ? Math.max(0, (cur.endsAt - now) / 1000) : 0;
   const progress = cur?.endsAt ? Math.min(1, Math.max(0, (now - cur.since) / (cur.endsAt - cur.since))) : 1;
-
-  /** Seconds until this slot is next on air in the current loop, or undefined if it isn't in it. */
-  const nextIn = (id: string): number | undefined => {
-    if (idx < 0 || loop.length === 0) return undefined;
-    let t = left;
-    for (let k = 1; k <= loop.length; k++) {
-      const e = loop[(idx + k) % loop.length];
-      if (e.sourceId === id) return t;
-      t += e.minutes * 60;
-    }
-    return undefined;
-  };
 
   return (
     <section className="loopband" aria-label="What the radio is listening to, and what it has heard today">
@@ -42,16 +32,13 @@ export function LoopBand({ snapshot }: { snapshot?: Snapshot }) {
         const color = so ? FAMILY_COLOR[so.family] : 'var(--muted)';
         const stat = snapshot?.slotStats?.[id];
         const active = cur?.sourceId === id;
-        const n = active ? undefined : nextIn(id);
-        const when = active
-          ? rot?.mode === 'continuous' ? 'listening' : switching ? 'switching…' : `${clock(left)} left`
-          : n !== undefined ? `next in ${clock(n)}` : id === 'spectrum' ? 'hourly' : id === 'sonde' ? 'launch windows' : 'not in this loop';
+        const when = active ? (rot?.mode === 'continuous' ? 'listening' : `${clock(left)} left`) : '';
         const quiet = !active && (stat?.value === '0' || stat?.value === undefined) && id !== 'spectrum';
         const clickable = !!SOURCE_TYPES[id];
         return (
           <div
             key={id}
-            className={`lt${active ? ' now' : ''}${quiet ? ' quiet' : ''}${clickable ? ' click' : ''}`}
+            className={`lt${active ? ' now' : ''}${active && switching ? ' switching-out' : ''}${!active && switching && id === nextId ? ' next' : ''}${quiet ? ' quiet' : ''}${clickable ? ' click' : ''}`}
             style={{ ['--c' as string]: color }}
             title={clickable ? `Show only ${name} in the feed` : name}
             {...(clickable && {
@@ -77,11 +64,21 @@ export function LoopBand({ snapshot }: { snapshot?: Snapshot }) {
               {active && cur && <span className="lt-freq">{cur.freqMhz.toFixed(3)} <small>MHz</small></span>}
             </div>
             <div className="lt-val">
-              <span className="v">{stat?.value ?? '—'}</span>
-              <span className="k">{stat?.label ?? ''}</span>
+              {(stat?.value !== undefined || !stat) && <span className="v">{stat?.value ?? '—'}</span>}
+              <span className="k">{active ? stat?.label : stat?.short ?? stat?.label}</span>
             </div>
-            <div className="lt-detail">{stat?.detail ?? ' '}</div>
-            <div className={`lt-when${switching && active ? ' switching' : ''}`}>{when}</div>
+            <div className="lt-detail">{(active ? stat?.detail : stat?.brief ?? stat?.detail) ?? '\u00a0'}</div>
+            {active && (
+              <div className="lt-when">
+                {switching ? (
+                  <span className="switching" role="status">
+                    switching<span className="dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>
+                  </span>
+                ) : (
+                  when
+                )}
+              </div>
+            )}
             {active && cur?.endsAt && <div className="lt-prog" style={{ width: `${progress * 100}%` }} />}
           </div>
         );

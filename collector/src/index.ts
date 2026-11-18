@@ -119,7 +119,7 @@ function snapshot(): Snapshot {
           mode: 'rotating',
           current: scheduler!.current && { sourceId: scheduler!.current.slotId, freqMhz: scheduler!.current.freqMhz, since: scheduler!.current.since, endsAt: scheduler!.current.endsAt },
           upNext: scheduler!.upNext.map((u) => ({ sourceId: u.slotId, minutes: u.minutes })),
-          loop: scheduler!.loop?.map((u) => ({ sourceId: u.slotId, minutes: u.minutes })),
+          loop: scheduler!.loop?.map((u) => ({ sourceId: u.slotId, minutes: u.minutes, freqMhz: u.freqMhz })),
           index: scheduler!.index,
           slots: scheduler!.slots,
         }
@@ -200,18 +200,18 @@ function slotStats(now: number, aircraft: Aircraft[]): Record<string, SlotStat> 
     const temp = pinnedTemp && sensors.get(pinnedTemp.key)?.temperatureF;
     const balloons = sondes.recent(now);
     const v: Record<string, SlotStat> = {
-      atc: { value: atc.length.toLocaleString('en-US'), label: 'calls today', detail: atcHour.length ? `${atcHour.length} this hour · busiest ${top(atcHour.map((f) => f.title))}` : undefined },
-      ais: { value: String(ships), label: 'ships today', detail: lastShip && now - lastShip.lastSeen < 86_400_000 ? `latest: ${lastShip.name ?? lastShip.mmsi}` : aisFixed.size ? `${plural(aisFixed.size, 'channel marker')} heard` : undefined },
-      vdl2: { value: store.countSightings(day, 'vdl2').toLocaleString('en-US'), label: 'flights on datalink', detail: top(airlines) ? `top airline: ${top(airlines)}` : undefined },
+      atc: { value: atc.length.toLocaleString('en-US'), label: 'calls today', short: 'calls', brief: atcHour.length ? `${atcHour.length} this hour` : undefined, detail: atcHour.length ? `${atcHour.length} this hour · busiest ${top(atcHour.map((f) => f.title))}` : undefined },
+      ais: { value: String(ships), label: 'ships today', short: 'ships', brief: aisFixed.size ? plural(aisFixed.size, 'marker') : undefined, detail: lastShip && now - lastShip.lastSeen < 86_400_000 ? `latest: ${lastShip.name ?? lastShip.mmsi}` : aisFixed.size ? `${plural(aisFixed.size, 'channel marker')} heard` : undefined },
+      vdl2: { value: store.countSightings(day, 'vdl2').toLocaleString('en-US'), label: 'flights on datalink', short: 'flights', brief: top(airlines), detail: top(airlines) ? `top airline: ${top(airlines)}` : undefined },
       ism:
         temp !== undefined
-          ? { value: `${Math.round(temp)}°F`, label: pinnedTemp!.label, detail: plural(cars, 'car') + ' passed today' }
-          : { value: String(cars), label: 'cars passed', detail: sensors.size ? `${plural(sensors.size, 'sensor')} heard` : undefined },
-      trains: { value: String(trainsToday.day === day ? trainsToday.bursts : 0), label: 'train bursts', detail: 'probe on 457.94 MHz' },
-      noaa: { value: String(wxClips), label: 'weather radio clips', detail: alerts ? plural(alerts, 'alert') + ' today' : tests.length ? `weekly test at ${new Date(tests[0].ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: env.TIMEZONE ?? 'America/New_York' })}` : 'no alerts today' },
-      sonde: { value: String(balloons.length), label: balloons.length === 1 ? 'balloon' : 'balloons', detail: balloons[0] ? `${balloons[0].id} at ${(balloons[0].altM / 1000).toFixed(1)} km` : 'launches ~7 AM & 7 PM' },
-      hdradio: { value: String(songs.length), label: 'songs today', detail: lastSong ? `${lastSong.body} · ${lastSong.title.replace(/ HD\d$/, '')}` : undefined },
-      spectrum: { label: 'spectrum sweep', detail: 'hourly · 80–1150 MHz' },
+          ? { value: `${Math.round(temp)}°F`, label: pinnedTemp!.label, short: 'outside', brief: plural(cars, 'car'), detail: plural(cars, 'car') + ' passed today' }
+          : { value: String(cars), label: 'cars passed', short: 'cars', brief: sensors.size ? plural(sensors.size, 'sensor') : undefined, detail: sensors.size ? `${plural(sensors.size, 'sensor')} heard` : undefined },
+      trains: { value: String(trainsToday.day === day ? trainsToday.bursts : 0), label: 'train bursts', short: 'bursts', brief: 'probe', detail: 'probe on 457.94 MHz' },
+      noaa: { value: String(wxClips), label: 'weather radio clips', short: 'clips', brief: alerts ? plural(alerts, 'alert') : 'no alerts', detail: alerts ? plural(alerts, 'alert') + ' today' : tests.length ? `weekly test at ${new Date(tests[0].ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: env.TIMEZONE ?? 'America/New_York' })}` : 'no alerts today' },
+      sonde: { value: String(balloons.length), label: balloons.length === 1 ? 'balloon' : 'balloons', short: 'balloons', brief: balloons[0]?.id, detail: balloons[0] ? `${balloons[0].id} at ${(balloons[0].altM / 1000).toFixed(1)} km` : 'launches ~7 AM & 7 PM' },
+      hdradio: { value: String(songs.length), label: 'songs today', short: 'songs', brief: lastSong?.title.replace(/ HD\d$/, ''), detail: lastSong ? `${lastSong.body} · ${lastSong.title.replace(/ HD\d$/, '')}` : undefined },
+      spectrum: { label: 'spectrum sweep', short: 'sweep', brief: 'hourly', detail: 'hourly · 80–1150 MHz' },
     };
     statsCache = { at: now, value: v };
   }
@@ -219,7 +219,7 @@ function slotStats(now: number, aircraft: Aircraft[]): Record<string, SlotStat> 
   const highest = Math.max(0, ...live.map((a) => (typeof a.altBaro === 'number' ? a.altBaro : 0)));
   return {
     ...statsCache.value,
-    adsb: { value: store.aircraftCount(day).toLocaleString('en-US'), label: 'aircraft today', detail: live.length ? `${live.length} overhead${highest ? ` · highest ${fmtAltFt(highest)}` : ''}` : undefined },
+    adsb: { value: store.aircraftCount(day).toLocaleString('en-US'), label: 'aircraft today', short: 'aircraft', brief: live.length ? `${live.length} up now` : undefined, detail: live.length ? `${live.length} overhead${highest ? ` · highest ${fmtAltFt(highest)}` : ''}` : undefined },
   };
 }
 

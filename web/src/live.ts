@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { FeedItem, Snapshot } from '../../shared/types.ts';
+import type { FeedItem, Rotation, Snapshot } from '../../shared/types.ts';
 import { apiUrl, isStatic } from './api.ts';
 
 const STATIC_POLL_MS = 15_000;
@@ -90,3 +90,34 @@ export function dur(minutes: number): string {
 
 /** Display name for a slot whose source the collector doesn't list (e.g. "trains" → "Trains"). */
 export const slotName = (id: string) => id.charAt(0).toUpperCase() + id.slice(1);
+
+/** Typical pause between one slot ending and the next starting (stop, remove, start). */
+export const SWITCH_GAP_MS = 5000;
+
+/**
+ * Moves the rotation forward on the viewer's clock when data is late. The published copy only
+ * refreshes every 15–45 s, longer than most slots, so without this it would sit on "0:00" or
+ * "switching" for most of each slot. Real data replaces the guess as soon as it arrives.
+ */
+export function predictRotation(rot: Rotation, now: number, freqOf: (id: string) => number | undefined): Rotation {
+  const loop = rot.loop;
+  if (rot.mode !== 'rotating' || !loop?.length || rot.index === undefined || !rot.current?.endsAt) return rot;
+  let index = rot.index;
+  let since = rot.current.since;
+  let endsAt = rot.current.endsAt;
+  let moved = false;
+  for (let guard = 0; now >= endsAt + SWITCH_GAP_MS && guard < loop.length * 3; guard++) {
+    index = (index + 1) % loop.length;
+    since = endsAt + SWITCH_GAP_MS;
+    endsAt = since + loop[index].minutes * 60_000;
+    moved = true;
+  }
+  if (!moved) return rot;
+  const e = loop[index];
+  return {
+    ...rot,
+    index,
+    current: { sourceId: e.sourceId, freqMhz: e.freqMhz ?? freqOf(e.sourceId) ?? rot.current.freqMhz, since, endsAt },
+    upNext: [1, 2, 3, 4].map((k) => loop[(index + k) % loop.length]).map((x) => ({ sourceId: x.sourceId, minutes: x.minutes })),
+  };
+}
