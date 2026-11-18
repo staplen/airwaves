@@ -52,6 +52,50 @@ const TIME_SCALE = Number(env.TIME_SCALE ?? 1); // e.g. 0.05 to rush through slo
 const COLLECTOR_URL = env.COLLECTOR_URL ?? 'http://127.0.0.1:8090';
 const TIMEZONE = env.TIMEZONE ?? 'America/New_York';
 const TOPIC = 'airwaves/scheduler/state';
+const RESUME_TOPIC = 'airwaves/scheduler/resume';
+
+interface Resume {
+  slotId: string;
+  index: number;
+  since: number;
+  endsAt: number;
+  at: number;
+}
+
+/** Reads the retained resume point from MQTT (waits a few seconds for the broker). */
+async function readResume(): Promise<Resume | undefined> {
+  if (!mqtt) return undefined;
+  const client = mqtt;
+  return new Promise((resolve) => {
+    const done = (r?: Resume) => {
+      clearTimeout(timer);
+      client.removeListener('message', onMsg);
+      client.unsubscribe(RESUME_TOPIC);
+      resolve(r);
+    };
+    const onMsg = (topic: string, payload: Buffer) => {
+      if (topic !== RESUME_TOPIC) return;
+      try {
+        done(payload.length ? (JSON.parse(payload.toString()) as Resume) : undefined);
+      } catch {
+        done();
+      }
+    };
+    const timer = setTimeout(() => done(), 5000);
+    client.on('message', onMsg);
+    client.subscribe(RESUME_TOPIC);
+  });
+}
+
+/** Where to start the first pass: the interrupted slot again if it hadn't got halfway, otherwise the next one. */
+export function resumeIndex(loop: { id: string }[], r: Resume | undefined, now: number): number {
+  if (!r || now - r.at > 3 * 3600_000 || !loop.length) return 0;
+  let idx = loop[r.index]?.id === r.slotId ? r.index : loop.findIndex((s) => s.id === r.slotId);
+  if (idx < 0) return 0;
+  const fraction = r.endsAt > r.since ? (r.at - r.since) / (r.endsAt - r.since) : 1;
+  if (fraction >= 0.5) idx += 1;
+  return idx % loop.length;
+}
 const CONTAINER_PREFIX = 'airwaves-slot-';
 const HEALTH_EVERY_MS = 15_000;
 
@@ -119,6 +163,8 @@ function publish(loop: Slot[], index: number, since: number, endsAt: number) {
     updatedAt: Date.now(),
   };
   mqtt?.publish(TOPIC, JSON.stringify(state), { retain: true });
+  // Resume point for the next start: which slot was running and how far it got.
+  mqtt?.publish(RESUME_TOPIC, JSON.stringify({ slotId: s.id, index, since, endsAt, at: Date.now() }), { retain: true });
 }
 
 function fail(s: Slot, reason: string) {
@@ -239,10 +285,14 @@ async function runSlot(loop: Slot[], i: number) {
 async function main() {
   await clearDongle();
   log(`slots: ${allSlots.map((s) => `${s.id} ${s.minutes}m${s.windows ? ' (windowed)' : ''}`).join(' → ')}${DRY_RUN ? ' [dry run]' : ''}`);
+  // Pick up where the previous run left off (e.g. after an update), so later slots aren't starved.
+  let start = resumeIndex(activeSlots(0), await readResume(), Date.now());
+  if (start > 0) log(`resuming at slot ${start + 1} (${activeSlots(0)[start].id})`);
   // Rebuild the loop at the start of each pass so windowed slots join and leave on time.
   for (let pass = 0; !stopping; pass++) {
     const loop = activeSlots(pass);
-    for (let i = 0; i < loop.length && !stopping; i++) await runSlot(loop, i);
+    for (let i = Math.min(start, loop.length - 1); i < loop.length && !stopping; i++) await runSlot(loop, i);
+    start = 0;
   }
 }
 
