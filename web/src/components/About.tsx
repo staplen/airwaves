@@ -21,7 +21,7 @@ export function About() {
           </p>
           <p className="about-offline">
             <b>None of this data comes from the internet.</b> Every aircraft, ship, message, sensor reading and audio clip is picked up over the air by the
-            antenna and decoded on a Raspberry Pi in the house. There are no flight-tracking APIs or online feeds. Only the background map tiles and fonts load
+            antenna and decoded on a Raspberry Pi in the house. There are no flight-tracking APIs or online feeds. Only the background map tiles, fonts and a page-view counter load
             from the web.
           </p>
           <ul>

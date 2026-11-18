@@ -2,14 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <!-- Google tag (gtag.js) -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-2GZ5ZCEBEQ"></script>
+    <!-- Google tag (gtag.js), on the public site only so local views aren't counted -->
     <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag() { dataLayer.push(arguments); }
-      gtag('js', new Date());
+      if (/(^|\.)nicostaple\.com$/.test(location.hostname)) {
+        var ga = document.createElement('script');
+        ga.async = true;
+        ga.src = 'https://www.googletagmanager.com/gtag/js?id=G-2GZ5ZCEBEQ';
+        document.head.appendChild(ga);
+        window.dataLayer = window.dataLayer || [];
+        function gtag() { dataLayer.push(arguments); }
+        gtag('js', new Date());
 
-      gtag('config', 'G-2GZ5ZCEBEQ');
+        gtag('config', 'G-2GZ5ZCEBEQ');
+      }
     </script>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Airwaves · live radio around DC</title>
