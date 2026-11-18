@@ -167,6 +167,11 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
   useEffect(() => {
     const m = new MlMap({ container: el.current!, style: STYLE, center: [-77.03, 38.9], zoom: 8.6, attributionControl: { compact: true } });
     map.current = m;
+    // MapLibre opens the compact attribution ("ⓘ") by default, covering the map's corner.
+    // Start it collapsed; the button still opens it.
+    const collapseAttribution = () => m.getContainer().querySelector('.maplibregl-ctrl-attrib.maplibregl-compact-show')?.classList.remove('maplibregl-compact-show');
+    m.once('idle', collapseAttribution);
+    m.on('resize', collapseAttribution);
     m.on('load', () => {
       m.addImage('plane', planeImage(), { sdf: true });
       m.addImage('ship', shipImage(), { sdf: true });
