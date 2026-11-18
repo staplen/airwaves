@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { FeedItem, Snapshot } from '../../shared/types.ts';
 import { apiUrl, isStatic } from './api.ts';
 
-const STATIC_POLL_MS = 30_000;
+const STATIC_POLL_MS = 15_000;
 
 export interface Live {
   snapshot?: Snapshot;

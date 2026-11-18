@@ -591,7 +591,7 @@ if (cleanEnv(env.PUBLISH_HOST)) {
     user: cleanEnv(env.PUBLISH_USER),
     pass: cleanEnv(env.PUBLISH_PASS),
     dir: cleanEnv(env.PUBLISH_DIR) || '/',
-    everySec: Number(env.PUBLISH_EVERY_SEC ?? 60) || 60,
+    everySec: Number(env.PUBLISH_EVERY_SEC ?? 30) || 30,
     webDir: WEB_DIR,
     roots: { clips: CLIPS_ROOT, art: ART_DIR, maps: join(HD_DIR, 'maps') },
     snapshot: () => publicSnapshot(snapshot()),

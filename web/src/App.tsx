@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { About } from './components/About.tsx';
 import { Dial } from './components/Dial.tsx';
 import { Feed } from './components/Feed.tsx';
@@ -22,6 +22,14 @@ function readOpen(): boolean {
 
 export function App() {
   const { snapshot, feed, connected } = useLive();
+  // Tick once a second so countdowns and "heard N min ago" move between data updates
+  // (the published copy only refreshes its data every 30 s).
+  const [tick, setTick] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setTick(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const view = useMemo(() => (snapshot ? { ...snapshot, now: Math.max(snapshot.now, tick) } : undefined), [snapshot, tick]);
   const stale = isStatic && snapshot?.publishedAt !== undefined && Date.now() - snapshot.publishedAt > STALE_MS;
   const [dialOpen, setDialOpen] = useState(readOpen);
 
@@ -43,14 +51,14 @@ export function App() {
           <circle cx="14" cy="14" r="3" fill={connected ? '#4ade80' : '#8b93a1'} />
           <path d="M8 8 A8.5 8.5 0 0 0 8 20 M20 8 A8.5 8.5 0 0 1 20 20 M4 4 A14 14 0 0 0 4 24 M24 4 A14 14 0 0 1 24 24" fill="none" stroke="#e6e9ee" strokeWidth="2" strokeLinecap="round" />
         </svg>
-        <RotationStrip snapshot={snapshot} expanded={dialOpen} onToggle={toggle} />
+        <RotationStrip snapshot={view} expanded={dialOpen} onToggle={toggle} />
         {stale && <span className="muted top-time">Last updated {ago(snapshot.publishedAt, Date.now())}</span>}
         {!connected && <span className="muted top-time">Reconnecting…</span>}
         <About />
       </header>
-      {dialOpen && <Dial snapshot={snapshot} />}
-      <Totals snapshot={snapshot} />
-      <RadioNow snapshot={snapshot} />
+      {dialOpen && <Dial snapshot={view} />}
+      <Totals snapshot={view} />
+      <RadioNow snapshot={view} />
       <div className="main">
         <MapView snapshot={snapshot} />
         <Feed items={feed} />
