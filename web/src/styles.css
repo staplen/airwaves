@@ -66,28 +66,26 @@ button.tog[aria-pressed='false'] { color: var(--muted); }
 
 /* Feed */
 .feed { flex: 1 1 400px; min-width: 0; display: flex; flex-direction: column; gap: 10px; height: 720px; }
-.feed-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
-.feed-head h2 { margin: 0; font-size: 17px; font-weight: 600; }
-.filters { display: flex; flex-wrap: wrap; gap: 6px; }
-.filt { min-height: 36px; padding: 0 12px; border-radius: 999px; font-size: 12px; font-weight: 500; background: var(--card); color: var(--text-2); border: 1px solid var(--line-strong); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
-.filt[aria-pressed='true'] { background: var(--text); color: var(--ground); border-color: var(--text); }
-/* Family pill = toggle + optional caret for its sub-categories; looks like one pill. */
-.filt-wrap { position: relative; }
-.filt-split { padding: 0; gap: 0; overflow: hidden; }
-.filt-split[data-state='true'] { background: var(--text); border-color: var(--text); }
-.filt-split[data-state='mixed'] { border-color: var(--text); }
-.filt-main, .filt-caret { min-height: 34px; border: none; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
-.filt-main { padding: 0 12px; }
-.filt-split.has-menu .filt-main { padding-right: 6px; }
-.filt-caret { padding: 0 10px 0 6px; border-left: 1px solid var(--line-strong); }
-.filt-split[data-state='true'] .filt-main, .filt-split[data-state='true'] .filt-caret { color: var(--ground); }
-.filt-split[data-state='true'] .filt-caret { border-left-color: #0b0e1333; }
-.filt-count { font-family: var(--mono); font-size: 10px; color: var(--muted); }
-.filt-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; min-width: 180px; padding: 6px; background: var(--raised); border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: 0 8px 24px #0008; display: flex; flex-direction: column; }
-.filt-option { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 8px; border-radius: 6px; font-size: 13px; cursor: pointer; }
-.filt-option:hover { background: var(--card); }
-.filt-option span:nth-child(2) { flex: 1; }
-.filt-option input { accent-color: var(--air); width: 16px; height: 16px; }
+/* Search-or-filter box: type tokens + free text in one field, suggestions below. */
+.fsearch { position: relative; }
+.fsearch-box { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 40px; padding: 3px 8px 3px 12px; border-radius: 10px; background: var(--card); border: 1px solid var(--line-strong); cursor: text; }
+.fsearch-box:focus-within { border-color: var(--air); }
+.fsearch-box input { flex: 1; min-width: 90px; min-height: 32px; border: none; outline: none; background: transparent; color: var(--text); font: inherit; font-size: 14px; }
+.fsearch-box input::placeholder { color: var(--muted); }
+.fsearch-box input::-webkit-search-cancel-button { display: none; }
+.ftoken { display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px 2px 9px; border-radius: 999px; background: var(--raised); border: 1px solid var(--line-strong); color: var(--text-2); font-size: 12px; white-space: nowrap; }
+.ftoken button, .fsearch-clear { border: none; background: transparent; color: var(--muted); cursor: pointer; font: inherit; display: inline-flex; align-items: center; justify-content: center; }
+.ftoken button { width: 20px; height: 20px; border-radius: 50%; font-size: 11px; }
+.ftoken button:hover, .fsearch-clear:hover { color: var(--text); background: var(--line); }
+.fsearch-count { font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: nowrap; }
+.fsearch-clear { width: 28px; height: 28px; border-radius: 6px; font-size: 13px; }
+.fmenu { position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 20; padding: 6px; background: var(--raised); border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: 0 12px 32px #000a; display: flex; flex-direction: column; max-height: 360px; overflow-y: auto; }
+.fmenu-sect { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; padding: 6px 8px 2px; }
+.fopt { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 8px; border-radius: 6px; font-size: 13px; color: var(--text); cursor: pointer; }
+.fopt.active { background: var(--line); }
+.fopt .fsearch-count { margin-left: auto; }
+.feed mark { background: #5ab0ff33; color: inherit; border-radius: 3px; padding: 0 1px; }
+.empty-clear { margin-left: 6px; border: none; background: none; color: var(--air); cursor: pointer; font: inherit; padding: 0; }
 .feed-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 4px; }
 .catch { padding: 12px 14px; display: flex; gap: 12px; align-items: flex-start; }
 .catch .bar { width: 3px; align-self: stretch; border-radius: 3px; flex: none; }

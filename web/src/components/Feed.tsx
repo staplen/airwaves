@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Family, FeedItem } from '../../../shared/types.ts';
 import { FAMILY_COLOR, FAMILY_LABEL } from '../bands.ts';
 import { ClipPlayer } from './ClipPlayer.tsx';
@@ -6,30 +6,44 @@ import { ClipPlayer } from './ClipPlayer.tsx';
 const PLACEHOLDER = /^(Transcript coming soon|Latest 60-second clip)/;
 const CLIP_RETENTION_MS = 24 * 3600_000; // matches the collector's audio purge
 
-// Each family splits into sub-categories by feed item kind. Everything starts visible;
-// viewers switch off what they don't want (remembered per browser).
+// Filterable types: each family splits into types by feed item kind, plus a per-family
+// catch-all for kinds we don't know yet. Picked types are OR'd; none picked = everything.
 const CATEGORIES: { family: Family; subs: { id: string; label: string; kinds: string[] }[] }[] = [
   { family: 'air', subs: [{ id: 'atc', label: 'ATC', kinds: ['ATC'] }, { id: 'datalink', label: 'Datalink', kinds: ['Datalink'] }, { id: 'aircraft', label: 'Aircraft', kinds: ['Aircraft'] }] },
   { family: 'sea', subs: [{ id: 'ships', label: 'Ships', kinds: ['Ship'] }] },
-  { family: 'wx', subs: [{ id: 'radio', label: 'Radio', kinds: ['Weather'] }, { id: 'alerts', label: 'Alerts', kinds: ['Weather alert', 'Weather test'] }, { id: 'balloons', label: 'Balloons', kinds: ['Balloon'] }] },
+  { family: 'wx', subs: [{ id: 'radio', label: 'Weather radio', kinds: ['Weather'] }, { id: 'alerts', label: 'Weather alerts', kinds: ['Weather alert', 'Weather test'] }, { id: 'balloons', label: 'Balloons', kinds: ['Balloon'] }] },
   { family: 'bcast', subs: [{ id: 'radio-hd', label: 'HD Radio', kinds: ['Radio'] }] },
   { family: 'home', subs: [{ id: 'street', label: 'Tire sensors', kinds: ['Street'] }, { id: 'sensors', label: 'Sensors', kinds: ['Sensor'] }, { id: 'meter', label: 'Gas meter', kinds: ['Home'] }] },
 ];
-// Every filter id: each sub-category plus a per-family catch-all for kinds we don't know yet.
-const ALL_IDS = CATEGORIES.flatMap((c) => [...c.subs.map((s) => s.id), `family:${c.family}`]);
+interface TypeOpt { id: string; label: string; family: Family }
+const TYPES: TypeOpt[] = CATEGORIES.flatMap((c) => [
+  ...c.subs.map((s) => ({ id: s.id, label: s.label, family: c.family })),
+  { id: `family:${c.family}`, label: `Other ${FAMILY_LABEL[c.family].toLowerCase()}`, family: c.family },
+]);
+const TYPE_BY_ID = new Map(TYPES.map((t) => [t.id, t]));
 const SUB_OF_KIND = new Map(CATEGORIES.flatMap((c) => c.subs.flatMap((s) => s.kinds.map((k) => [k, s.id] as const))));
-const HIDDEN_KEY = 'airwaves.hiddenCatches';
+const TYPES_KEY = 'airwaves.feedTypes';
 
-function readHidden(): Set<string> {
+function readTypes(): string[] {
   try {
-    return new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? '[]') as string[]);
+    const v = JSON.parse(localStorage.getItem(TYPES_KEY) ?? '[]') as string[];
+    return v.filter((id) => TYPE_BY_ID.has(id));
   } catch {
-    return new Set();
+    return [];
   }
 }
 
-/** Sub-category id for an item; unknown kinds fall back to their family. */
+/** Type id for an item; unknown kinds fall back to their family. */
 const subOf = (i: FeedItem) => SUB_OF_KIND.get(i.kind) ?? `family:${i.family}`;
+const haystack = (i: FeedItem) => `${i.kind} ${i.title} ${i.meta} ${i.body}`.toLowerCase();
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Wraps every occurrence of the search words in <mark>. */
+function highlight(text: string, words: string[]): ReactNode {
+  if (words.length === 0 || !text) return text;
+  const parts = text.split(new RegExp(`(${words.map(escapeRe).join('|')})`, 'gi'));
+  return parts.map((p, i) => (i % 2 ? <mark key={i}>{p}</mark> : p));
+}
 
 // Older items had the collector's UTC time baked into meta ("119.100 · 20:28:11"); drop it.
 const LEGACY_TIME = /\s·\s\d{1,2}:\d{2}(:\d{2})?$/;
@@ -40,112 +54,186 @@ function metaLine(item: FeedItem): string {
   return `${item.meta.replace(LEGACY_TIME, '')} · ${time}`;
 }
 
+type Opt = { key: string; type: TypeOpt; count: number } | { key: string; title: string; kindLabel: string; family: Family; count: number };
+
+const listJoin = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} or ${xs[xs.length - 1]}`);
+
 export function Feed({ items }: { items: FeedItem[] }) {
-  const [hidden, setHidden] = useState<Set<string>>(readHidden);
-  const save = (next: Set<string>) => {
-    setHidden(next);
+  const [types, setTypesState] = useState<string[]>(readTypes);
+  const setTypes = (next: string[]) => {
+    setTypesState(next);
     try {
-      localStorage.setItem(HIDDEN_KEY, JSON.stringify([...next]));
+      localStorage.setItem(TYPES_KEY, JSON.stringify(next));
     } catch {
       /* per-viewer convenience only */
     }
   };
-  const toggleSub = (id: string) => {
-    const next = new Set(hidden);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    save(next);
-  };
-  // A family button hides all its sub-categories, or shows them all if any are hidden.
-  const toggleFamily = (f: Family) => {
-    const ids = [...CATEGORIES.find((c) => c.family === f)!.subs.map((s) => s.id), `family:${f}`];
-    const next = new Set(hidden);
-    if (ids.some((id) => !next.has(id))) ids.forEach((id) => next.add(id));
-    else ids.forEach((id) => next.delete(id));
-    save(next);
-  };
-  const shown = items.filter((i) => !hidden.has(subOf(i)));
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(-1);
+  const input = useRef<HTMLInputElement>(null);
+  const root = useRef<HTMLDivElement>(null);
 
-  // Sub-category dropdown: one open at a time; closes on outside click or Escape.
-  const [openMenu, setOpenMenu] = useState<Family | null>(null);
-  const menuRoot = useRef<HTMLDivElement>(null);
+  const words = useMemo(() => query.trim().toLowerCase().split(/\s+/).filter(Boolean), [query]);
+  const typeOk = (i: FeedItem) => types.length === 0 || types.includes(subOf(i));
+  const shown = items.filter((i) => typeOk(i) && (words.length === 0 || words.every((w) => haystack(i).includes(w))));
+
+  const counts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const i of items) m.set(subOf(i), (m.get(subOf(i)) ?? 0) + 1);
+    return m;
+  }, [items]);
+
+  // Suggestions: with an empty box, every type that has items (by count); while typing,
+  // types whose name matches plus the most common item titles that match.
+  const opts: Opt[] = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const typeOpts = TYPES.filter((t) => !types.includes(t.id) && (counts.get(t.id) ?? 0) > 0 && (!q || t.label.toLowerCase().includes(q)))
+      .map((t) => ({ key: `t:${t.id}`, type: t, count: counts.get(t.id) ?? 0 }))
+      .sort((a, b) => b.count - a.count);
+    if (!q) return typeOpts;
+    const byTitle = new Map<string, { title: string; kindLabel: string; family: Family; count: number }>();
+    for (const i of items) {
+      if (!typeOk(i) || !words.every((w) => i.title.toLowerCase().includes(w))) continue;
+      const e = byTitle.get(i.title);
+      if (e) e.count++;
+      else byTitle.set(i.title, { title: i.title, kindLabel: TYPE_BY_ID.get(subOf(i))?.label ?? i.kind, family: i.family, count: 1 });
+    }
+    const matchOpts = [...byTitle.values()].sort((a, b) => b.count - a.count).slice(0, 5).map((m) => ({ key: `m:${m.title}`, ...m }));
+    return [...typeOpts.slice(0, 4), ...matchOpts];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, types, items, counts]);
+
+  useEffect(() => setActive(-1), [query, types]);
   useEffect(() => {
-    if (!openMenu) return;
+    if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (!menuRoot.current?.contains(e.target as Node)) setOpenMenu(null);
+      if (!root.current?.contains(e.target as Node)) setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpenMenu(null);
     document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [openMenu]);
-  const count = (id: string) => items.filter((i) => subOf(i) === id).length;
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  const pick = (o: Opt) => {
+    if ('type' in o) {
+      setTypes([...types, o.type.id]);
+      // A typed type name ("atc") becomes the token, so clear it from the text.
+      if (query.trim() && o.type.label.toLowerCase().includes(query.trim().toLowerCase())) setQuery('');
+    } else {
+      setQuery(o.title);
+    }
+    setOpen(false);
+    input.current?.focus();
+  };
+  const clearAll = () => {
+    setTypes([]);
+    setQuery('');
+    input.current?.focus();
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setOpen(true);
+      setActive((a) => Math.min(opts.length - 1, a + 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActive((a) => Math.max(-1, a - 1));
+    } else if (e.key === 'Enter') {
+      if (open && active >= 0 && opts[active]) pick(opts[active]);
+      else setOpen(false);
+    } else if (e.key === 'Escape') {
+      if (open) setOpen(false);
+      else if (query) setQuery('');
+    } else if (e.key === 'Backspace' && query === '' && types.length > 0) {
+      setTypes(types.slice(0, -1));
+    }
+  };
+
+  const filtered = types.length > 0 || words.length > 0;
+  const typeNames = types.map((id) => TYPE_BY_ID.get(id)?.label ?? id);
+  const menuOpen = open && opts.length > 0;
+  const firstMatch = opts.findIndex((o) => !('type' in o));
 
   return (
     <section className="feed" aria-label="Feed">
-      <div className="feed-head">
-        <h2>Feed</h2>
-        <div className="filters" role="group" aria-label="Show or hide catches" ref={menuRoot}>
-          <button type="button" className="filt" aria-pressed={hidden.size === 0} onClick={() => save(hidden.size === 0 ? new Set(ALL_IDS) : new Set())} title={hidden.size === 0 ? 'Hide everything, then pick what to show' : 'Show everything'}>
-            All
-          </button>
-          {CATEGORIES.map((c) => {
-            const off = c.subs.filter((sub) => hidden.has(sub.id)).length;
-            const state = off === 0 ? 'true' : off === c.subs.length ? 'false' : 'mixed';
-            const open = openMenu === c.family;
+      <div className="fsearch" ref={root}>
+        <div className="fsearch-box" onMouseDown={(e) => { if (e.target === e.currentTarget) { e.preventDefault(); input.current?.focus(); setOpen(true); } }}>
+          <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" style={{ flex: 'none' }}><circle cx="6" cy="6" r="4.5" fill="none" stroke="var(--muted)" strokeWidth="1.5" /><path d="M9.5 9.5 L13 13" stroke="var(--muted)" strokeWidth="1.5" strokeLinecap="round" /></svg>
+          {types.map((id) => {
+            const t = TYPE_BY_ID.get(id);
             return (
-              <div key={c.family} className="filt-wrap">
-                <div className={`filt filt-split${c.subs.length > 1 ? ' has-menu' : ''}`} data-state={state}>
-                  <button type="button" className="filt-main" aria-pressed={state} onClick={() => toggleFamily(c.family)}>
-                    <span className="dot" style={{ background: FAMILY_COLOR[c.family] }} />
-                    {FAMILY_LABEL[c.family]}
-                    {state === 'mixed' && <span className="filt-count">{c.subs.length - off}/{c.subs.length}</span>}
-                  </button>
-                  {c.subs.length > 1 && (
-                    <button type="button" className="filt-caret" aria-haspopup="true" aria-expanded={open} aria-label={`${FAMILY_LABEL[c.family]} types`} onClick={() => setOpenMenu(open ? null : c.family)}>
-                      <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 L5 6.5 L8 3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                    </button>
-                  )}
-                </div>
-                {open && (
-                  <div className="filt-menu" role="group" aria-label={`${FAMILY_LABEL[c.family]} types`}>
-                    {c.subs.map((sub) => (
-                      <label key={sub.id} className="filt-option">
-                        <input type="checkbox" checked={!hidden.has(sub.id)} onChange={() => toggleSub(sub.id)} />
-                        <span>{sub.label}</span>
-                        <span className="muted mono">{count(sub.id)}</span>
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <span key={id} className="ftoken">
+                <span className="dot" style={{ background: t ? FAMILY_COLOR[t.family] : undefined }} />
+                {t?.label ?? id}
+                <button type="button" aria-label={`Remove ${t?.label ?? id} filter`} onClick={() => setTypes(types.filter((x) => x !== id))}>✕</button>
+              </span>
             );
           })}
+          <input
+            ref={input}
+            type="search"
+            role="combobox"
+            aria-label="Search or filter feed"
+            aria-expanded={menuOpen}
+            aria-controls="feed-suggest"
+            aria-activedescendant={menuOpen && active >= 0 ? `feed-opt-${active}` : undefined}
+            aria-autocomplete="list"
+            placeholder={types.length ? 'Search within these' : 'Search or filter feed'}
+            value={query}
+            onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+            onFocus={() => setOpen(true)}
+            onKeyDown={onKeyDown}
+          />
+          <span className="fsearch-count" aria-live="polite">{filtered ? `${shown.length} of ${items.length}` : items.length}</span>
+          {filtered && <button type="button" className="fsearch-clear" aria-label="Clear search and filters" onClick={clearAll}>✕</button>}
         </div>
+        {menuOpen && (
+          <div className="fmenu" id="feed-suggest" role="listbox" aria-label="Suggestions">
+            {opts.map((o, idx) => (
+              <div key={o.key} style={{ display: 'contents' }}>
+                {idx === 0 && 'type' in o && <div className="fmenu-sect">Filter by type</div>}
+                {idx === firstMatch && <div className="fmenu-sect">Matches</div>}
+                <div
+                  id={`feed-opt-${idx}`}
+                  role="option"
+                  aria-selected={idx === active}
+                  className={idx === active ? 'fopt active' : 'fopt'}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onMouseEnter={() => setActive(idx)}
+                  onClick={() => pick(o)}
+                >
+                  <span className="dot" style={{ background: FAMILY_COLOR['type' in o ? o.type.family : o.family] }} />
+                  {'type' in o ? o.type.label : <span>{highlight(o.title, words)} <span className="muted">· {o.kindLabel}</span></span>}
+                  <span className="fsearch-count">{o.count}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       <div className="feed-list">
-        {shown.length === 0 &&
-          (ALL_IDS.every((id) => hidden.has(id)) ? (
-            <div className="card empty">Everything is hidden. Pick a type above to show just that, or click All to show everything.</div>
-          ) : hidden.size > 0 ? (
-            <div className="card empty">Nothing caught for the selected types yet.</div>
-          ) : (
-            <div className="card empty">Nothing caught here yet.</div>
-          ))}
+        {shown.length === 0 && (
+          <div className="card empty">
+            {!filtered
+              ? 'Nothing caught here yet.'
+              : words.length > 0
+                ? `Nothing matches “${query.trim()}”${types.length ? ` in ${listJoin(typeNames)}` : ''}.`
+                : `No ${listJoin(typeNames)} in the last ${items.length} items.`}
+            {filtered && <button type="button" className="empty-clear" onClick={clearAll}>Clear filters</button>}
+          </div>
+        )}
         {shown.map((i) => (
           <article key={i.id} className="card catch">
             <div className="bar" style={{ background: FAMILY_COLOR[i.family] }} />
             {i.image && <img className="catch-art" src={i.image} alt="" loading="lazy" width={56} height={56} />}
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="catch-head">
-                <span className="catch-kind" style={{ color: FAMILY_COLOR[i.family] }}>{i.kind}</span>
-                <b style={{ fontSize: 13 }}>{i.title}</b>
-                <span className="mono muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{metaLine(i)}</span>
+                <span className="catch-kind" style={{ color: FAMILY_COLOR[i.family] }}>{highlight(i.kind, words)}</span>
+                <b style={{ fontSize: 13 }}>{highlight(i.title, words)}</b>
+                <span className="mono muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{highlight(metaLine(i), words)}</span>
               </div>
-              {i.body && !PLACEHOLDER.test(i.body) && <div className={i.mono ? 'catch-body mono' : 'catch-body'}>{i.body}</div>}
+              {i.body && !PLACEHOLDER.test(i.body) && <div className={i.mono ? 'catch-body mono' : 'catch-body'}>{highlight(i.body, words)}</div>}
               {i.raw && (
                 <details className="raw">
                   <summary>Original message</summary>
