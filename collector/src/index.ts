@@ -556,7 +556,7 @@ const server = createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
     const pub = isPublic(req);
     const snap = snapshot();
-    const feed = store.recentFeed(200);
+    const feed = store.recentFeedPerKind();
     res.end(JSON.stringify(pub ? { snapshot: publicSnapshot(snap), feed: feed.map(publicItem) } : { snapshot: snap, feed }));
     return;
   }
@@ -744,7 +744,7 @@ if (cleanEnv(env.PUBLISH_HOST)) {
     webDir: WEB_DIR,
     roots: { clips: CLIPS_ROOT, art: ART_DIR, maps: join(HD_DIR, 'maps') },
     snapshot: () => publicSnapshot(snapshot()),
-    feed: (n) => store.recentFeed(n).map(publicItem),
+    feed: () => store.recentFeedPerKind().map(publicItem),
     spectrum: currentSpectrum,
     overlays: currentOverlays,
   }).start();

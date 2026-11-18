@@ -69,24 +69,18 @@ export class Store {
   }
 
   recentFeed(limit = 50): FeedItem[] {
-    const rows = this.db
-      .prepare('SELECT * FROM feed ORDER BY ts DESC, id DESC LIMIT ?')
-      .all(limit) as Array<Record<string, unknown>>;
-    return rows.map((r) => ({
-      id: Number(r.id),
-      ts: Number(r.ts),
-      family: r.family as FeedItem['family'],
-      kind: String(r.kind),
-      title: String(r.title),
-      meta: String(r.meta),
-      body: String(r.body),
-      mono: r.mono === 1,
-      clip: typeof r.clip === 'string' ? r.clip : undefined,
-      image: typeof r.image === 'string' ? r.image : undefined,
-      raw: typeof r.raw === 'string' ? r.raw : undefined,
-      tag: typeof r.tag === 'string' ? r.tag : undefined,
-    }));
+    const rows = this.db.prepare('SELECT * FROM feed ORDER BY ts DESC, id DESC LIMIT ?').all(limit) as Array<Record<string, unknown>>;
+    return rows.map(toItem);
   }
+
+  /** The newest `perKind` items of each kind, newest first, so busy kinds (ATC) don't push out quiet ones. */
+  recentFeedPerKind(perKind = FEED_PER_KIND): FeedItem[] {
+    const rows = this.db
+      .prepare('SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY kind ORDER BY ts DESC, id DESC) AS rn FROM feed) WHERE rn <= ? ORDER BY ts DESC, id DESC')
+      .all(perKind) as Array<Record<string, unknown>>;
+    return rows.map(toItem);
+  }
+
 
   /** Records an aircraft sighting; returns true if it is the first today. */
   seeAircraft(day: string, hex: string, flight: string | undefined, type: string | undefined, ts: number): boolean {
@@ -203,4 +197,24 @@ const DAY_FORMAT = new Intl.DateTimeFormat('en-CA', { timeZone: process.env.TIME
 /** Calendar day in the receiver's time zone, e.g. 2026-11-17. */
 export function localDay(ts: number): string {
   return DAY_FORMAT.format(new Date(ts));
+}
+
+/** How many of each feed kind the dashboard loads (busy ATC would otherwise crowd out songs and weather). */
+export const FEED_PER_KIND = 60;
+
+function toItem(r: Record<string, unknown>): FeedItem {
+  return {
+    id: Number(r.id),
+    ts: Number(r.ts),
+    family: r.family as FeedItem['family'],
+    kind: String(r.kind),
+    title: String(r.title),
+    meta: String(r.meta),
+    body: String(r.body),
+    mono: r.mono === 1,
+    clip: typeof r.clip === 'string' ? r.clip : undefined,
+    image: typeof r.image === 'string' ? r.image : undefined,
+    raw: typeof r.raw === 'string' ? r.raw : undefined,
+    tag: typeof r.tag === 'string' ? r.tag : undefined,
+  };
 }

@@ -9,7 +9,6 @@ const DAY_MS = 24 * 3600_000;
 const RETENTION_EVERY_MS = 10 * 60_000;
 const SPECTRUM_EVERY_MS = 10 * 60_000;
 const MEDIA_DIRS = ['clips/atc', 'clips/noaa', 'clips/radio', 'art', 'maps'];
-const FEED_LIMIT = 100;
 
 // ---- pure helpers (unit-tested) ---------------------------------------------------------------
 
@@ -164,7 +163,7 @@ export interface PublisherOptions {
   /** Public (home-stripped) snapshot, before URL rewriting. */
   snapshot: () => Snapshot;
   /** Public feed items, newest first, before URL rewriting. */
-  feed: (limit: number) => FeedItem[];
+  feed: () => FeedItem[];
   spectrum: () => SpectrumHeat;
   overlays: () => Overlays;
 }
@@ -298,7 +297,7 @@ export class Publisher {
 
     const now = Date.now();
     const snap = rewriteSnapshot(this.opts.snapshot());
-    const feed = this.opts.feed(FEED_LIMIT).map(rewriteFeedItem);
+    const feed = this.opts.feed().map(rewriteFeedItem);
     const overlays = rewriteOverlays(this.opts.overlays());
 
     // Media first, so the JSON never points at a file that isn't there yet.

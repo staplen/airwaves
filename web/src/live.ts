@@ -12,6 +12,17 @@ export interface Live {
 
 const newestFirst = (a: FeedItem, b: FeedItem) => b.ts - a.ts || b.id - a.id;
 
+/** Matches the collector: the newest 60 items of each kind, so busy ATC doesn't push out songs and weather. */
+const PER_KIND = 60;
+function trimPerKind(items: FeedItem[]): FeedItem[] {
+  const seen = new Map<string, number>();
+  return items.filter((i) => {
+    const n = (seen.get(i.kind) ?? 0) + 1;
+    seen.set(i.kind, n);
+    return n <= PER_KIND;
+  });
+}
+
 /** Loads the initial state, then follows the collector's event stream (or polls the published JSON files). */
 export function useLive(): Live {
   const [snapshot, setSnapshot] = useState<Snapshot>();
@@ -33,7 +44,7 @@ export function useLive(): Live {
           setFeed((f) => {
             const byId = new Map(f.map((x) => [x.id, x]));
             for (const i of items) byId.set(i.id, i);
-            return [...byId.values()].sort(newestFirst).slice(0, 200);
+            return trimPerKind([...byId.values()].sort(newestFirst));
           });
           setConnected(true);
         } catch {
@@ -62,7 +73,7 @@ export function useLive(): Live {
     es.addEventListener('snapshot', (e) => setSnapshot(JSON.parse((e as MessageEvent).data)));
     es.addEventListener('feed', (e) => {
       const item = JSON.parse((e as MessageEvent).data) as FeedItem;
-      setFeed((f) => (f.some((x) => x.id === item.id) ? f : [item, ...f].slice(0, 200)));
+      setFeed((f) => (f.some((x) => x.id === item.id) ? f : trimPerKind([item, ...f])));
     });
     return () => {
       closed = true;
