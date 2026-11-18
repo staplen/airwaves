@@ -22,7 +22,7 @@ antenna → RTL-SDR → scheduler ─ starts/stops one decoder container at a ti
 |---|---|
 | `collector/` | Ingests decoder output, stores sightings and the feed, serves the API and dashboard |
 | `scheduler/` | Rotates decoder containers via the Docker API; slot list in `scheduler/slots.json` |
-| `web/` | Dashboard: frequency dial, live map, "Catches" feed, daily totals |
+| `web/` | Dashboard: frequency dial, live map, feed, daily totals |
 | `shared/` | Types shared by all three |
 | `deploy/` | Running it on a Raspberry Pi with Home Assistant OS, plus the NOAA decoder image |
 

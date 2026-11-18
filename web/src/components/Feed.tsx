@@ -85,9 +85,9 @@ export function Feed({ items }: { items: FeedItem[] }) {
   const count = (id: string) => items.filter((i) => subOf(i) === id).length;
 
   return (
-    <section className="feed" aria-label="Catches">
+    <section className="feed" aria-label="Feed">
       <div className="feed-head">
-        <h2>Catches</h2>
+        <h2>Feed</h2>
         <div className="filters" role="group" aria-label="Show or hide catches" ref={menuRoot}>
           <button type="button" className="filt" aria-pressed={hidden.size === 0} onClick={() => save(hidden.size === 0 ? new Set(ALL_IDS) : new Set())} title={hidden.size === 0 ? 'Hide everything, then pick what to show' : 'Show everything'}>
             All

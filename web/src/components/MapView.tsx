@@ -48,6 +48,14 @@ function shipImage(): ImageData {
   return g.getImageData(0, 0, s, s);
 }
 
+/** Short map label for fixed AIS transmitters: "Marker 5", "Light 3", "AIS station". */
+function fixedLabel(f: AisFixed): string {
+  if (f.kind === 'base') return 'AIS station';
+  const t = f.aidType ?? '';
+  const kind = /light/i.test(t) ? 'Light' : /beacon/i.test(t) ? 'Beacon' : /mark|buoy/i.test(t) || !t ? 'Marker' : t;
+  return f.name ? `${kind} ${f.name}` : kind;
+}
+
 function vesselsFC(list: Vessel[], fixed: AisFixed[], now: number): FC {
   const ships: GeoJSON.Feature[] = list
     .filter((v) => v.lat !== undefined && v.lon !== undefined)
@@ -59,7 +67,7 @@ function vesselsFC(list: Vessel[], fixed: AisFixed[], now: number): FC {
   const aids: GeoJSON.Feature[] = fixed.map((f) => ({
     type: 'Feature',
     geometry: { type: 'Point', coordinates: [f.lon, f.lat] },
-    properties: { kind: f.kind, label: f.kind === 'aid' ? `${f.aidType ?? 'Aid'}${f.name ? ` ${f.name}` : ''}` : 'AIS base station' },
+    properties: { kind: f.kind, label: fixedLabel(f) },
   }));
   return { type: 'FeatureCollection', features: [...ships, ...aids] };
 }
@@ -171,7 +179,7 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
       m.addLayer({ id: 'home-halo', type: 'circle', source: 'rings', filter: ['has', 'home'], paint: { 'circle-radius': 14, 'circle-color': '#4ade80', 'circle-opacity': 0.15 } });
       m.addLayer({ id: 'home', type: 'circle', source: 'rings', filter: ['has', 'home'], paint: { 'circle-radius': 5, 'circle-color': '#4ade80' } });
       m.addLayer({ id: 'aids', type: 'circle', source: 'sea', filter: ['!=', ['get', 'kind'], 'ship'], paint: { 'circle-radius': 4, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': '#3cc9b4', 'circle-stroke-width': 1.5 } });
-      m.addLayer({ id: 'aid-labels', type: 'symbol', source: 'sea', filter: ['!=', ['get', 'kind'], 'ship'], minzoom: 10, layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 10, 'text-offset': [0.8, 0], 'text-anchor': 'left' }, paint: { 'text-color': '#3cc9b4', 'text-halo-color': '#0b0e13', 'text-halo-width': 1 } });
+      m.addLayer({ id: 'aid-labels', type: 'symbol', source: 'sea', filter: ['!=', ['get', 'kind'], 'ship'], layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': ['interpolate', ['linear'], ['zoom'], 7, 9, 11, 11], 'text-offset': [0.8, 0], 'text-anchor': 'left', 'text-optional': true }, paint: { 'text-color': '#3cc9b4', 'text-halo-color': '#0b0e13', 'text-halo-width': 1.2 } });
       m.addLayer({
         id: 'ships',
         type: 'symbol',
