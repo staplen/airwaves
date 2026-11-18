@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Map as MlMap, setWorkerUrl, type GeoJSONSource } from 'maplibre-gl';
+import { Map as MlMap, Popup, setWorkerUrl, type GeoJSONSource } from 'maplibre-gl';
 // MapLibre loads its worker relative to its own module, which breaks once bundled.
 // Let Vite bundle the worker (with its shared chunk) and hand MapLibre the URL.
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
@@ -50,6 +50,64 @@ function shipImage(): ImageData {
   return g.getImageData(0, 0, s, s);
 }
 
+type NavIcon = 'nav-port' | 'nav-stbd' | 'nav-light' | 'nav-other' | 'nav-station';
+
+/** Chart-style symbols: green can (port hand), red nun (starboard hand), magenta light flare, yellow diamond, shore station mast. */
+function navImage(kind: NavIcon): ImageData {
+  const s = 24;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d')!;
+  g.lineJoin = 'round';
+  g.strokeStyle = '#0b0e13';
+  g.lineWidth = 2;
+  g.beginPath();
+  if (kind === 'nav-port') {
+    g.rect(6, 6, 12, 12);
+    g.fillStyle = '#2fbf5b';
+  } else if (kind === 'nav-stbd') {
+    g.moveTo(12, 4); g.lineTo(20, 19); g.lineTo(4, 19); g.closePath();
+    g.fillStyle = '#e5484d';
+  } else if (kind === 'nav-light') {
+    const pts = [[12, 2], [14, 10], [22, 12], [14, 14], [12, 22], [10, 14], [2, 12], [10, 10]];
+    pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
+    g.closePath();
+    g.fillStyle = '#d96bd9';
+  } else if (kind === 'nav-other') {
+    g.moveTo(12, 4); g.lineTo(20, 12); g.lineTo(12, 20); g.lineTo(4, 12); g.closePath();
+    g.fillStyle = '#f5b547';
+  } else {
+    g.fillStyle = 'rgba(0,0,0,0)';
+    g.strokeStyle = '#3cc9b4';
+    g.lineWidth = 1.8;
+    g.moveTo(7, 21); g.lineTo(12, 7); g.lineTo(17, 21); g.moveTo(9, 15); g.lineTo(15, 15);
+    g.moveTo(6, 7); g.arc(12, 9, 6, Math.PI * 1.15, Math.PI * 1.85);
+  }
+  g.fill();
+  g.stroke();
+  return g.getImageData(0, 0, s, s);
+}
+
+function navIcon(f: AisFixed): NavIcon {
+  if (f.kind === 'base') return 'nav-station';
+  const t = f.aidType ?? '';
+  if (/starboard/i.test(t)) return 'nav-stbd';
+  if (/port/i.test(t)) return 'nav-port';
+  if (/light/i.test(t)) return 'nav-light';
+  return 'nav-other';
+}
+
+/** Title and plain-English explanation for the details card. */
+function navInfo(f: AisFixed): { title: string; what: string } {
+  if (f.kind === 'base') return { title: 'AIS shore station', what: 'A fixed AIS transmitter on land that relays ship positions and broadcasts the time.' };
+  const icon = navIcon(f);
+  const title = f.name ? `Channel marker ${f.name}` : 'Channel marker';
+  if (icon === 'nav-stbd') return { title, what: 'Red nun, starboard-hand mark: keep it on your right heading upriver ("red right returning").' };
+  if (icon === 'nav-port') return { title, what: 'Green can, port-hand mark: keep it on your left heading upriver.' };
+  if (icon === 'nav-light') return { title: f.name ? `Light ${f.name}` : 'Navigation light', what: f.aidType ? `${f.aidType}.` : 'A lit navigation aid.' };
+  return { title, what: f.aidType ? `${f.aidType}.` : 'A navigation aid.' };
+}
+
 /** Short map label for fixed AIS transmitters: "Marker 5", "Light 3", "AIS station". */
 function fixedLabel(f: AisFixed): string {
   if (f.kind === 'base') return 'AIS station';
@@ -69,7 +127,7 @@ function vesselsFC(list: Vessel[], fixed: AisFixed[], now: number): FC {
   const aids: GeoJSON.Feature[] = fixed.map((f) => ({
     type: 'Feature',
     geometry: { type: 'Point', coordinates: [f.lon, f.lat] },
-    properties: { kind: f.kind, label: fixedLabel(f) },
+    properties: { kind: f.kind, label: fixedLabel(f), icon: navIcon(f), title: navInfo(f).title, what: navInfo(f).what, lastSeen: f.lastSeen },
   }));
   return { type: 'FeatureCollection', features: [...ships, ...aids] };
 }
@@ -217,8 +275,28 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
       m.addLayer({ id: 'ring-labels', type: 'symbol', source: 'rings', filter: ['has', 'label'], layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 10, 'text-offset': [0, -0.8] }, paint: { 'text-color': '#8b93a1' } });
       m.addLayer({ id: 'home-halo', type: 'circle', source: 'rings', filter: ['has', 'home'], paint: { 'circle-radius': 14, 'circle-color': '#4ade80', 'circle-opacity': 0.15, 'circle-radius-transition': { duration: 0 }, 'circle-opacity-transition': { duration: 0 } } });
       m.addLayer({ id: 'home', type: 'circle', source: 'rings', filter: ['has', 'home'], paint: { 'circle-radius': 5, 'circle-color': '#4ade80', 'circle-opacity-transition': { duration: 0 } } });
-      m.addLayer({ id: 'aids', type: 'circle', source: 'sea', filter: ['!=', ['get', 'kind'], 'ship'], paint: { 'circle-radius': 4, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': '#3cc9b4', 'circle-stroke-width': 1.5 } });
-      m.addLayer({ id: 'aid-labels', type: 'symbol', source: 'sea', filter: ['!=', ['get', 'kind'], 'ship'], layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': ['interpolate', ['linear'], ['zoom'], 7, 9, 11, 11], 'text-offset': [0.8, 0], 'text-anchor': 'left', 'text-optional': true }, paint: { 'text-color': '#3cc9b4', 'text-halo-color': '#0b0e13', 'text-halo-width': 1.2 } });
+      (['nav-port', 'nav-stbd', 'nav-light', 'nav-other', 'nav-station'] as const).forEach((k) => m.addImage(k, navImage(k), { pixelRatio: 1.5 }));
+      m.addLayer({ id: 'aids', type: 'symbol', source: 'sea', filter: ['!=', ['get', 'kind'], 'ship'], layout: { 'icon-image': ['get', 'icon'], 'icon-allow-overlap': true } });
+      // Click a marker for a small card: what it is, which side of the channel, and where the data came from.
+      m.on('mouseenter', 'aids', () => (m.getCanvas().style.cursor = 'pointer'));
+      m.on('mouseleave', 'aids', () => (m.getCanvas().style.cursor = ''));
+      m.on('click', 'aids', (e) => {
+        const f = e.features?.[0];
+        if (!f || f.geometry.type !== 'Point') return;
+        const p = f.properties as { title: string; what: string; lastSeen: number; kind: string };
+        const card = document.createElement('div');
+        card.className = 'nav-card';
+        const h = document.createElement('b');
+        h.textContent = p.title;
+        const what = document.createElement('div');
+        what.textContent = p.what;
+        const src = document.createElement('div');
+        src.className = 'muted';
+        src.textContent = `Source: ${p.kind === 'base' ? 'its own AIS broadcast' : 'AIS aid-to-navigation broadcast'} · last heard ${ago(Number(p.lastSeen), Date.now())}`;
+        card.append(h, what, src);
+        new Popup({ closeButton: false, maxWidth: '240px', className: 'nav-popup', offset: 10 }).setLngLat(f.geometry.coordinates as [number, number]).setDOMContent(card).addTo(m);
+      });
+      m.addLayer({ id: 'aid-labels', type: 'symbol', source: 'sea', filter: ['!=', ['get', 'kind'], 'ship'], layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': ['interpolate', ['linear'], ['zoom'], 7, 9, 11, 11], 'text-offset': [0.9, 0], 'text-anchor': 'left', 'text-optional': true }, paint: { 'text-color': '#c9cfd8', 'text-halo-color': '#0b0e13', 'text-halo-width': 1.2 } });
       m.addLayer({
         id: 'ships',
         type: 'symbol',

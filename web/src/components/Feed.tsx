@@ -7,7 +7,7 @@ const PLACEHOLDER = /^(Transcript coming soon|Latest 60-second clip)/;
 const CLIP_RETENTION_MS = 24 * 3600_000; // matches the collector's audio purge
 
 // Filterable types: each family splits into types by feed item kind, plus a per-family
-// catch-all for kinds we don't know yet. Picked types are OR'd; none picked = everything.
+// catch-all for kinds we don't know yet. Everything is shown until a viewer unticks types.
 const CATEGORIES: { family: Family; subs: { id: string; label: string; kinds: string[] }[] }[] = [
   { family: 'air', subs: [{ id: 'atc', label: 'ATC', kinds: ['ATC'] }, { id: 'datalink', label: 'Datalink', kinds: ['Datalink'] }, { id: 'aircraft', label: 'Aircraft', kinds: ['Aircraft'] }] },
   { family: 'sea', subs: [{ id: 'ships', label: 'Ships', kinds: ['Ship'] }] },
@@ -22,11 +22,11 @@ const TYPES: TypeOpt[] = CATEGORIES.flatMap((c) => [
 ]);
 const TYPE_BY_ID = new Map(TYPES.map((t) => [t.id, t]));
 const SUB_OF_KIND = new Map(CATEGORIES.flatMap((c) => c.subs.flatMap((s) => s.kinds.map((k) => [k, s.id] as const))));
-const TYPES_KEY = 'airwaves.feedTypes';
+const HIDDEN_KEY = 'airwaves.feedHidden';
 
-function readTypes(): string[] {
+function readHidden(): string[] {
   try {
-    const v = JSON.parse(localStorage.getItem(TYPES_KEY) ?? '[]') as string[];
+    const v = JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? '[]') as string[];
     return v.filter((id) => TYPE_BY_ID.has(id));
   } catch {
     return [];
@@ -54,28 +54,32 @@ function metaLine(item: FeedItem): string {
   return `${item.meta.replace(LEGACY_TIME, '')} · ${time}`;
 }
 
-type Opt = { key: string; type: TypeOpt; count: number } | { key: string; title: string; kindLabel: string; family: Family; count: number };
-
 const listJoin = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} or ${xs[xs.length - 1]}`);
 
+type Opt = { key: string; title: string; kindLabel: string; family: Family; count: number };
+
+const FAMILY_ORDER: Family[] = ['air', 'bcast', 'wx', 'home', 'sea'];
+
 export function Feed({ items }: { items: FeedItem[] }) {
-  const [types, setTypesState] = useState<string[]>(readTypes);
-  const setTypes = (next: string[]) => {
-    setTypesState(next);
+  // Types are all shown to start; viewers untick the ones they don't want (remembered per browser).
+  const [hidden, setHiddenState] = useState<string[]>(readHidden);
+  const setHidden = (next: string[]) => {
+    setHiddenState(next);
     try {
-      localStorage.setItem(TYPES_KEY, JSON.stringify(next));
+      localStorage.setItem(HIDDEN_KEY, JSON.stringify(next));
     } catch {
       /* per-viewer convenience only */
     }
   };
   const [query, setQuery] = useState('');
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(false); // text suggestions
+  const [typesOpen, setTypesOpen] = useState(false); // type checklist
   const [active, setActive] = useState(-1);
   const input = useRef<HTMLInputElement>(null);
   const root = useRef<HTMLDivElement>(null);
 
   const words = useMemo(() => query.trim().toLowerCase().split(/\s+/).filter(Boolean), [query]);
-  const typeOk = (i: FeedItem) => types.length === 0 || types.includes(subOf(i));
+  const typeOk = (i: FeedItem) => !hidden.includes(subOf(i));
   const shown = items.filter((i) => typeOk(i) && (words.length === 0 || words.every((w) => haystack(i).includes(w))));
 
   const counts = useMemo(() => {
@@ -84,51 +88,56 @@ export function Feed({ items }: { items: FeedItem[] }) {
     return m;
   }, [items]);
 
-  // Suggestions: with an empty box, every type that has items (by count); while typing,
-  // types whose name matches plus the most common item titles that match.
+  // Every known type is listed (empty ones dimmed); the per-family catch-alls only when they have items.
+  const listed = TYPES.filter((t) => !t.id.startsWith('family:') || (counts.get(t.id) ?? 0) > 0);
+  const onTypes = listed.filter((t) => !hidden.includes(t.id));
+  const offTypes = listed.filter((t) => hidden.includes(t.id));
+  const tokenLabel =
+    offTypes.length === 0 ? 'All types' : onTypes.length === 0 ? 'No types' : onTypes.length === 1 ? `Only ${onTypes[0].label}` : offTypes.length === 1 ? `All but ${offTypes[0].label}` : `${onTypes.length} of ${listed.length} types`;
+  const toggle = (id: string) => setHidden(hidden.includes(id) ? hidden.filter((x) => x !== id) : [...hidden, id]);
+  const only = (id: string) => setHidden(TYPES.map((t) => t.id).filter((x) => x !== id));
+  const allOn = () => setHidden([]);
+
+  // While typing: the most common item titles that match, as one-tap searches.
   const opts: Opt[] = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const typeOpts = TYPES.filter((t) => !types.includes(t.id) && (counts.get(t.id) ?? 0) > 0 && (!q || t.label.toLowerCase().includes(q)))
-      .map((t) => ({ key: `t:${t.id}`, type: t, count: counts.get(t.id) ?? 0 }))
-      .sort((a, b) => b.count - a.count);
-    if (!q) return typeOpts;
-    const byTitle = new Map<string, { title: string; kindLabel: string; family: Family; count: number }>();
+    if (words.length === 0) return [];
+    const byTitle = new Map<string, Opt>();
     for (const i of items) {
       if (!typeOk(i) || !words.every((w) => i.title.toLowerCase().includes(w))) continue;
       const e = byTitle.get(i.title);
       if (e) e.count++;
-      else byTitle.set(i.title, { title: i.title, kindLabel: TYPE_BY_ID.get(subOf(i))?.label ?? i.kind, family: i.family, count: 1 });
+      else byTitle.set(i.title, { key: i.title, title: i.title, kindLabel: TYPE_BY_ID.get(subOf(i))?.label ?? i.kind, family: i.family, count: 1 });
     }
-    const matchOpts = [...byTitle.values()].sort((a, b) => b.count - a.count).slice(0, 5).map((m) => ({ key: `m:${m.title}`, ...m }));
-    return [...typeOpts.slice(0, 4), ...matchOpts];
+    return [...byTitle.values()].sort((a, b) => b.count - a.count).slice(0, 5);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, types, items, counts]);
+  }, [words, hidden, items]);
 
-  useEffect(() => setActive(-1), [query, types]);
+  useEffect(() => setActive(-1), [query]);
   useEffect(() => {
-    if (!open) return;
+    if (!open && !typesOpen) return;
     const onDown = (e: MouseEvent) => {
-      if (!root.current?.contains(e.target as Node)) setOpen(false);
+      if (!root.current?.contains(e.target as Node)) {
+        setOpen(false);
+        setTypesOpen(false);
+      }
     };
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setTypesOpen(false);
     document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [open]);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open, typesOpen]);
 
   const pick = (o: Opt) => {
-    if ('type' in o) {
-      setTypes([...types, o.type.id]);
-      // A typed type name ("atc") becomes the token, so clear it from the text.
-      if (query.trim() && o.type.label.toLowerCase().includes(query.trim().toLowerCase())) setQuery('');
-    } else {
-      setQuery(o.title);
-    }
+    setQuery(o.title);
     setOpen(false);
     input.current?.focus();
   };
   const clearAll = () => {
-    setTypes([]);
+    setHidden([]);
     setQuery('');
-    input.current?.focus();
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -145,68 +154,99 @@ export function Feed({ items }: { items: FeedItem[] }) {
     } else if (e.key === 'Escape') {
       if (open) setOpen(false);
       else if (query) setQuery('');
-    } else if (e.key === 'Backspace' && query === '' && types.length > 0) {
-      setTypes(types.slice(0, -1));
     }
   };
 
-  const filtered = types.length > 0 || words.length > 0;
-  const typeNames = types.map((id) => TYPE_BY_ID.get(id)?.label ?? id);
-  const menuOpen = open && opts.length > 0;
-  const firstMatch = opts.findIndex((o) => !('type' in o));
+  const filtered = offTypes.length > 0 || words.length > 0;
+  const onNames = onTypes.map((t) => t.label);
+  const menuOpen = open && !typesOpen && opts.length > 0;
 
   return (
     <section className="feed" aria-label="Feed">
       <div className="fsearch" ref={root}>
-        <div className="fsearch-box" onMouseDown={(e) => { if (e.target === e.currentTarget) { e.preventDefault(); input.current?.focus(); setOpen(true); } }}>
+        <div className="fsearch-box" onMouseDown={(e) => { if (e.target === e.currentTarget) { e.preventDefault(); input.current?.focus(); } }}>
           <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" style={{ flex: 'none' }}><circle cx="6" cy="6" r="4.5" fill="none" stroke="var(--muted)" strokeWidth="1.5" /><path d="M9.5 9.5 L13 13" stroke="var(--muted)" strokeWidth="1.5" strokeLinecap="round" /></svg>
-          {types.map((id) => {
-            const t = TYPE_BY_ID.get(id);
-            return (
-              <span key={id} className="ftoken">
-                <span className="dot" style={{ background: t ? FAMILY_COLOR[t.family] : undefined }} />
-                {t?.label ?? id}
-                <button type="button" aria-label={`Remove ${t?.label ?? id} filter`} onClick={() => setTypes(types.filter((x) => x !== id))}>✕</button>
-              </span>
-            );
-          })}
+          <button
+            type="button"
+            className={offTypes.length ? 'ftoken ftypes on' : 'ftoken ftypes'}
+            aria-haspopup="true"
+            aria-expanded={typesOpen}
+            onClick={() => { setTypesOpen(!typesOpen); setOpen(false); }}
+          >
+            {tokenLabel}
+            <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 L5 6.5 L8 3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+          </button>
           <input
             ref={input}
             type="search"
             role="combobox"
-            aria-label="Search or filter feed"
+            aria-label="Search feed"
             aria-expanded={menuOpen}
             aria-controls="feed-suggest"
             aria-activedescendant={menuOpen && active >= 0 ? `feed-opt-${active}` : undefined}
             aria-autocomplete="list"
-            placeholder={types.length ? 'Search within these' : 'Search or filter feed'}
+            placeholder="Search feed"
             value={query}
-            onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+            onChange={(e) => { setQuery(e.target.value); setOpen(true); setTypesOpen(false); }}
             onFocus={() => setOpen(true)}
             onKeyDown={onKeyDown}
           />
           <span className="fsearch-count" aria-live="polite">{filtered ? `${shown.length} of ${items.length}` : items.length}</span>
-          {filtered && <button type="button" className="fsearch-clear" aria-label="Clear search and filters" onClick={clearAll}>✕</button>}
+          {filtered && <button type="button" className="fsearch-clear" aria-label="Clear search and show all types" onClick={clearAll}>✕</button>}
         </div>
+        {typesOpen && (
+          <div className="fmenu ftypes-menu" role="group" aria-label="Types to show">
+            <label className="fcheck fcheck-all">
+              <input
+                type="checkbox"
+                checked={offTypes.length === 0}
+                ref={(el) => { if (el) el.indeterminate = offTypes.length > 0 && onTypes.length > 0; }}
+                onChange={() => (offTypes.length === 0 ? setHidden(TYPES.map((t) => t.id)) : allOn())}
+              />
+              <b>All types</b>
+              <span className="fsearch-count">{onTypes.length} of {listed.length}</span>
+            </label>
+            {FAMILY_ORDER.map((f) => {
+              const rows = listed.filter((t) => t.family === f);
+              if (rows.length === 0) return null;
+              return (
+                <div key={f} style={{ display: 'contents' }}>
+                  <div className="fmenu-sect" style={{ color: FAMILY_COLOR[f] }}>{FAMILY_LABEL[f]}</div>
+                  {rows.map((t) => {
+                    const n = counts.get(t.id) ?? 0;
+                    return (
+                      <div key={t.id} className={n ? 'fcheck' : 'fcheck empty'}>
+                        <label>
+                          <input type="checkbox" checked={!hidden.includes(t.id)} onChange={() => toggle(t.id)} />
+                          <span>{t.label}</span>
+                        </label>
+                        <button type="button" className="fonly" onClick={() => only(t.id)}>only</button>
+                        <span className="fsearch-count">{n}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        )}
         {menuOpen && (
           <div className="fmenu" id="feed-suggest" role="listbox" aria-label="Suggestions">
+            <div className="fmenu-sect">Matches</div>
             {opts.map((o, idx) => (
-              <div key={o.key} style={{ display: 'contents' }}>
-                {idx === 0 && 'type' in o && <div className="fmenu-sect">Filter by type</div>}
-                {idx === firstMatch && <div className="fmenu-sect">Matches</div>}
-                <div
-                  id={`feed-opt-${idx}`}
-                  role="option"
-                  aria-selected={idx === active}
-                  className={idx === active ? 'fopt active' : 'fopt'}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onMouseEnter={() => setActive(idx)}
-                  onClick={() => pick(o)}
-                >
-                  <span className="dot" style={{ background: FAMILY_COLOR['type' in o ? o.type.family : o.family] }} />
-                  {'type' in o ? o.type.label : <span>{highlight(o.title, words)} <span className="muted">· {o.kindLabel}</span></span>}
-                  <span className="fsearch-count">{o.count}</span>
-                </div>
+              <div
+                key={o.key}
+                id={`feed-opt-${idx}`}
+                role="option"
+                aria-selected={idx === active}
+                className={idx === active ? 'fopt active' : 'fopt'}
+                onMouseDown={(e) => e.preventDefault()}
+                onMouseEnter={() => setActive(idx)}
+                onClick={() => pick(o)}
+              >
+                <span className="dot" style={{ background: FAMILY_COLOR[o.family] }} />
+                <span>{highlight(o.title, words)} <span className="muted">· {o.kindLabel}</span></span>
+                <span className="fsearch-count">{o.count}</span>
               </div>
             ))}
           </div>
@@ -217,10 +257,12 @@ export function Feed({ items }: { items: FeedItem[] }) {
           <div className="card empty">
             {!filtered
               ? 'Nothing caught here yet.'
-              : words.length > 0
-                ? `Nothing matches “${query.trim()}”${types.length ? ` in ${listJoin(typeNames)}` : ''}.`
-                : `No ${listJoin(typeNames)} in the last ${items.length} items.`}
-            {filtered && <button type="button" className="empty-clear" onClick={clearAll}>Clear filters</button>}
+              : onTypes.length === 0
+                ? 'Every type is unticked.'
+                : words.length > 0
+                  ? `Nothing matches “${query.trim()}”${offTypes.length ? ` in ${listJoin(onNames)}` : ''}.`
+                  : `No ${listJoin(onNames)} in the last ${items.length} items.`}
+            {filtered && <button type="button" className="empty-clear" onClick={clearAll}>Show everything</button>}
           </div>
         )}
         {shown.map((i) => (

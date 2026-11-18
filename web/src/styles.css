@@ -243,3 +243,24 @@ button.tog[aria-pressed='false'] { color: var(--muted); }
 .pin-action input { width: 130px; min-height: 30px; padding: 0 8px; border-radius: 7px; border: 1px solid var(--line-strong); background: var(--card); color: var(--text); font: inherit; font-size: 12px; }
 .pin-btn { min-height: 30px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--line-strong); background: var(--card); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
 .pin-btn.on { background: var(--home); border-color: var(--home); color: var(--ground); }
+
+/* Type checklist (filters option B) */
+button.ftoken { font: inherit; font-size: 12px; cursor: pointer; padding: 3px 10px; }
+.ftypes svg { opacity: .7; }
+.ftypes.on { border-color: var(--air); color: var(--text); }
+.ftypes-menu { right: auto; width: min(320px, 100%); }
+.fcheck { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; border-radius: 6px; font-size: 13px; }
+.fcheck:hover { background: var(--line); }
+.fcheck label, label.fcheck { display: flex; align-items: center; gap: 10px; flex: 1; cursor: pointer; min-height: 32px; }
+.fcheck input { accent-color: var(--air); width: 15px; height: 15px; margin: 0; }
+.fcheck.empty span { color: var(--muted); }
+.fcheck-all { border-bottom: 1px solid var(--line-strong); border-radius: 6px 6px 0 0; margin-bottom: 2px; }
+.fonly { visibility: hidden; border: none; background: none; color: var(--air); font: inherit; font-size: 11px; cursor: pointer; padding: 2px 4px; }
+.fcheck:hover .fonly, .fonly:focus-visible { visibility: visible; }
+
+/* Channel marker details card */
+.nav-popup .maplibregl-popup-content { background: #12161dee; border: 1px solid var(--line-strong); border-radius: 10px; padding: 10px 12px; color: var(--text-2); font: 12px/1.5 Inter, system-ui, sans-serif; box-shadow: 0 8px 24px #0008; }
+.nav-popup .maplibregl-popup-tip { display: none; }
+.nav-card { display: flex; flex-direction: column; gap: 4px; }
+.nav-card b { color: var(--text); font-size: 13px; }
+.nav-card .muted { font-size: 11px; }

@@ -94,7 +94,8 @@ export function parseVdl2(raw: string): Vdl2Catch | undefined {
   // Ground station handoffs carry position, altitude and destination.
   const xid = obj(avlc.xid);
   if (xid) {
-    const dest = str(param(xid, 'dst_airport') ?? findKey(xid, 'dst_airport'));
+    const rawDest = str(param(xid, 'dst_airport') ?? findKey(xid, 'dst_airport'));
+    const dest = rawDest && /[A-Z0-9]/i.test(rawDest) ? rawDest : undefined; // "----" = not filed
     const loc = obj(param(xid, 'ac_location') ?? findKey(xid, 'ac_location'));
     const lat = typeof obj(loc?.loc)?.lat === 'number' ? (obj(loc?.loc)!.lat as number) : undefined;
     const lon = typeof obj(loc?.loc)?.lon === 'number' ? (obj(loc?.loc)!.lon as number) : undefined;
