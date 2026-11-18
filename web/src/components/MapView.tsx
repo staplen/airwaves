@@ -102,10 +102,22 @@ function TrafficGrid({ t, zoom }: { t: NonNullable<Overlays['traffic']>; zoom: n
   });
   const rows = Math.max(t.rows ?? 3, ...placed.map((x) => x.row));
   const cols = Math.max(t.cols ?? 3, ...placed.map((x) => x.col));
+  const bg = t.background ? `rgba(${t.background.join(',')}, 0.12)` : undefined;
   const tile = `calc(min(${TILE_PX}px, (100cqw - 32px) / ${cols}, (100cqh - 64px) / ${rows}) * ${zoom})`;
   return (
     <div className="traffic-grid" style={{ gridTemplateColumns: `repeat(${cols}, ${tile})`, gridTemplateRows: `repeat(${rows}, ${tile})` }}>
-      {placed.map((x) => <img key={x.url} src={x.url} alt="" draggable={false} style={{ gridRow: x.row, gridColumn: x.col }} />)}
+      {Array.from({ length: rows * cols }, (_, i) => {
+        const row = Math.floor(i / cols) + 1;
+        const col = (i % cols) + 1;
+        const got = placed.find((x) => x.row === row && x.col === col);
+        return got ? (
+          <img key={got.url} src={got.url} alt="" draggable={false} style={{ gridRow: row, gridColumn: col }} />
+        ) : (
+          <div key={`ph-${row}-${col}`} className="traffic-ph" style={{ gridRow: row, gridColumn: col, ...(bg ? { background: bg } : {}) }}>
+            <span>not received yet</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
