@@ -189,7 +189,7 @@ export class Publisher {
   }
 
   start() {
-    console.log(`publisher: ${this.opts.user ?? ''}@${this.opts.host}:${this.opts.port}${this.opts.dir} every ${this.opts.everySec}s`);
+    console.log(`publisher: user "${this.opts.user ?? ''}" at ${this.opts.host}:${this.opts.port} dir "${this.opts.dir}", password ${this.opts.pass ? `set (${this.opts.pass.length} chars)` : 'MISSING'}, every ${this.opts.everySec}s`);
     void this.loop();
   }
 
@@ -233,7 +233,15 @@ export class Publisher {
     c.on('close', () => {
       if (this.client === c) this.client = undefined;
     });
-    await c.connect({ host: this.opts.host, port: this.opts.port, username: this.opts.user, password: this.opts.pass, readyTimeout: 20_000, keepaliveInterval: 30_000 });
+    // Some hosts (IONOS among them) only offer "keyboard-interactive" login, which desktop clients
+    // fall back to automatically; answer its password prompt with the same password.
+    const ssh = (c as unknown as { client?: { on: (ev: string, fn: (...a: unknown[]) => void) => void } }).client;
+    ssh?.on('keyboard-interactive', (...a: unknown[]) => {
+      const prompts = (a[3] as unknown[]) ?? [];
+      const finish = a[4] as (answers: string[]) => void;
+      finish(prompts.map(() => this.opts.pass ?? ''));
+    });
+    await c.connect({ host: this.opts.host, port: this.opts.port, username: this.opts.user, password: this.opts.pass, tryKeyboard: true, readyTimeout: 20_000, keepaliveInterval: 30_000 });
     this.client = c;
     console.log('publisher: connected');
     return c;

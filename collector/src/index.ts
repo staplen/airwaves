@@ -582,13 +582,15 @@ setInterval(() => {
 }, 10 * 60_000);
 
 // Public, read-only copy of the dashboard on a web host (always the public view).
-if (env.PUBLISH_HOST) {
+// Values from Docker's --env-file arrive exactly as written: trim spaces and surrounding quotes.
+const cleanEnv = (v?: string) => v?.trim().replace(/^(['"])(.*)\1$/, '$2') || undefined;
+if (cleanEnv(env.PUBLISH_HOST)) {
   new Publisher({
-    host: env.PUBLISH_HOST,
-    port: Number(env.PUBLISH_PORT ?? 22),
-    user: env.PUBLISH_USER,
-    pass: env.PUBLISH_PASS,
-    dir: env.PUBLISH_DIR || '/',
+    host: cleanEnv(env.PUBLISH_HOST)!,
+    port: Number(cleanEnv(env.PUBLISH_PORT) ?? 22),
+    user: cleanEnv(env.PUBLISH_USER),
+    pass: cleanEnv(env.PUBLISH_PASS),
+    dir: cleanEnv(env.PUBLISH_DIR) || '/',
     everySec: Number(env.PUBLISH_EVERY_SEC ?? 60) || 60,
     webDir: WEB_DIR,
     roots: { clips: CLIPS_ROOT, art: ART_DIR, maps: join(HD_DIR, 'maps') },
