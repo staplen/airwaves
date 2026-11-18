@@ -7,6 +7,10 @@
 # to /share/airwaves/app.old and clones the repo. Data and settings live outside app/.
 set -eu
 
+# Everything runs inside main(), which the shell reads in full before running anything.
+# That matters because this script updates itself with git pull partway through.
+main() {
+
 REPO=https://github.com/staplen/airwaves.git
 APP=/share/airwaves/app            # path in the SSH session
 HOST_APP=/mnt/data/supervisor/share/airwaves/app  # same folder as Docker sees it
@@ -62,3 +66,7 @@ docker run -d --name airwaves-scheduler --restart unless-stopped --network host 
   -v /var/run/docker.sock:/var/run/docker.sock -v "$SHARE:/airwaves" -w /airwaves/app node:26-alpine \
   node scheduler/src/index.ts >/dev/null
 echo "== updated to $(git -C "$APP" log --oneline -1)"
+}
+
+main "$@"
+exit
