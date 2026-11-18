@@ -78,6 +78,8 @@ export interface SchedulerState {
   upNext: { slotId: string; minutes: number }[];
   slots?: string[]; // every slot id in the loop
   failures?: Record<string, { at: number; reason: string }>; // last failure per slot
+  loop?: { slotId: string; minutes: number }[]; // this pass's slots in order (ids can repeat)
+  index?: number; // position of the running slot in `loop`
   loopMinutes: number;
   updatedAt: number;
 }
@@ -87,6 +89,9 @@ export interface Rotation {
   mode: 'continuous' | 'rotating';
   current?: { sourceId: string; freqMhz: number; since: number; endsAt?: number };
   upNext: { sourceId: string; minutes: number }[];
+  /** The whole current pass in order; `index` is the running entry. */
+  loop?: { sourceId: string; minutes: number }[];
+  index?: number;
 }
 
 export interface FeedItem {

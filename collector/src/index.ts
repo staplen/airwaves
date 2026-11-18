@@ -108,6 +108,8 @@ function snapshot(): Snapshot {
           mode: 'rotating',
           current: scheduler!.current && { sourceId: scheduler!.current.slotId, freqMhz: scheduler!.current.freqMhz, since: scheduler!.current.since, endsAt: scheduler!.current.endsAt },
           upNext: scheduler!.upNext.map((u) => ({ sourceId: u.slotId, minutes: u.minutes })),
+          loop: scheduler!.loop?.map((u) => ({ sourceId: u.slotId, minutes: u.minutes })),
+          index: scheduler!.index,
         }
       : { mode: 'continuous', current: { sourceId: 'adsb', freqMhz: 1090, since: startedAt }, upNext: [] },
     sources: SOURCES.map((s) => ({

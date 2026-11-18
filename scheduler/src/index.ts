@@ -113,6 +113,8 @@ function publish(loop: Slot[], index: number, since: number, endsAt: number) {
     upNext,
     slots: [...new Set(allSlots.map((x) => x.id))],
     failures,
+    loop: loop.map((x) => ({ slotId: x.id, minutes: x.minutes })),
+    index,
     loopMinutes: loop.reduce((a, x) => a + x.minutes, 0),
     updatedAt: Date.now(),
   };
