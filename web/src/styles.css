@@ -183,3 +183,10 @@ button.tog[aria-pressed='false'] { color: var(--muted); }
 .clipper.compact { margin-top: 0; padding: 0; gap: 0; background: none; border: none; }
 .clipper.compact .clipper-time { display: none; }
 .clipper.compact .clipper-btn { width: 26px; height: 26px; }
+
+/* Reference bands (TV, cellular) above the heatmap, aligned with the dial's log scale */
+.ref-row { position: relative; height: 16px; margin-top: 2px; }
+.ref-band { position: absolute; top: 0; height: 14px; border-radius: 3px; background: #8b93a133; border: 1px solid #8b93a155; overflow: hidden; }
+.ref-band span { display: block; font-size: 9px; line-height: 12px; color: var(--muted); white-space: nowrap; text-align: center; overflow: hidden; text-overflow: ellipsis; padding: 0 2px; }
+.heat { cursor: crosshair; }
+.heat-readout { color: var(--text-2); }

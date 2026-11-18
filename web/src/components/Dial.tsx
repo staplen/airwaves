@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Snapshot, SpectrumHeat } from '../../../shared/types.ts';
 import { apiUrl } from '../api.ts';
-import { BANDS, FAMILY_COLOR, dialX } from '../bands.ts';
+import { BANDS, FAMILY_COLOR, REF_BANDS, bandAt, dialFreq, dialX } from '../bands.ts';
 
 const TICKS = [100, 200, 300, 500, 700, 1000];
 
@@ -29,7 +29,7 @@ function useSpectrum(): SpectrumHeat | undefined {
   return heat;
 }
 
-function Heatmap({ heat }: { heat?: SpectrumHeat }) {
+function Heatmap({ heat, onHover }: { heat?: SpectrumHeat; onHover: (text?: string) => void }) {
   const cells = useMemo(() => {
     if (!heat || heat.rows.length === 0) return undefined;
     let lo = Infinity;
@@ -42,8 +42,21 @@ function Heatmap({ heat }: { heat?: SpectrumHeat }) {
     }));
   }, [heat]);
   if (!heat || !cells) return <span className="muted" style={{ fontSize: 12 }}>{heat ? 'No sweeps yet' : 'Loading spectrum…'}</span>;
+  // Hover readout: frequency, hour, level and what lives there.
+  const readout = (e: React.MouseEvent<HTMLDivElement>) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    const fx = (e.clientX - box.left) / box.width;
+    const fy = (e.clientY - box.top) / box.height;
+    const row = heat.rows[Math.min(heat.rows.length - 1, Math.max(0, Math.floor(fy * heat.rows.length)))];
+    const bin = Math.min(heat.bins - 1, Math.max(0, Math.floor(fx * heat.bins)));
+    const mhz = dialFreq((bin + 0.5) / heat.bins);
+    const db = row?.db[bin];
+    const when = row ? new Date(row.hour * 3600_000).toLocaleTimeString([], { hour: 'numeric' }) : '';
+    const what = bandAt(mhz);
+    onHover(`≈${mhz < 200 ? mhz.toFixed(1) : Math.round(mhz)} MHz${what ? ` (${what})` : ''} · around ${when} · ${db === null || db === undefined ? 'no reading' : `${db.toFixed(1)} dB`}`);
+  };
   return (
-    <div className="heat" role="img" aria-label="Spectrum activity over the last 24 hours">
+    <div className="heat" role="img" aria-label="Spectrum activity over the last 24 hours" onMouseMove={readout} onMouseLeave={() => onHover(undefined)}>
       {cells.map((r) => (
         <div key={r.hour} className="heat-row" style={{ gridTemplateColumns: `repeat(${heat.bins}, 1fr)` }}>
           {r.cols.map((c, i) => <i key={i} style={{ background: c }} />)}
@@ -58,6 +71,7 @@ export function Dial({ snapshot }: { snapshot?: Snapshot }) {
   const source = snapshot?.sources.find((s) => s.id === current?.sourceId);
   const running = new Set(snapshot?.sources.filter((s) => s.running).map((s) => s.id));
   const heat = useSpectrum();
+  const [hover, setHover] = useState<string>();
   const continuous = !snapshot || snapshot.rotation.mode === 'continuous';
 
   return (
@@ -120,9 +134,16 @@ export function Dial({ snapshot }: { snapshot?: Snapshot }) {
         ))}
         {current && <div className="playhead" style={{ left: `${dialX(current.freqMhz)}%` }} />}
       </div>
-      <Heatmap heat={heat} />
-      <span className="muted" style={{ fontSize: 12 }}>
-        Last 24 hours, brighter = busier. Faded bands aren't in the rotation yet.
+      <div className="ref-row" aria-hidden="true">
+        {REF_BANDS.map((b) => (
+          <span key={b.name} className="ref-band" style={{ left: `${dialX(b.lo)}%`, width: `${dialX(b.hi) - dialX(b.lo)}%` }} title={`${b.name}: ${b.lo}–${b.hi} MHz, not decoded`}>
+            <span>{b.name}</span>
+          </span>
+        ))}
+      </div>
+      <Heatmap heat={heat} onHover={setHover} />
+      <span className={hover ? 'mono heat-readout' : 'muted'} style={{ fontSize: 12 }} aria-live="polite">
+        {hover ?? 'Last 24 hours, brighter = busier. Grey bands are TV and cell towers (not decoded). Hover for details.'}
       </span>
     </section>
   );

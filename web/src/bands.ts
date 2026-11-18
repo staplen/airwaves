@@ -36,3 +36,22 @@ const HI = Math.log(1150);
 export function dialX(mhz: number): number {
   return ((Math.log(mhz) - LO) / (HI - LO)) * 100;
 }
+
+/** Strong transmitters we don't decode, drawn for context so the heatmap's bright blocks make sense. */
+export const REF_BANDS: { name: string; lo: number; hi: number }[] = [
+  { name: 'TV 7–13', lo: 174, hi: 216 },
+  { name: 'TV 14–36', lo: 470, hi: 608 },
+  { name: 'Cell 600', lo: 617, hi: 652 },
+  { name: 'Cell 700', lo: 698, hi: 806 },
+  { name: 'Cell 850', lo: 824, hi: 894 },
+];
+
+/** Frequency (MHz) at a 0–1 position on the log-scaled dial. */
+export function dialFreq(x: number): number {
+  return Math.exp(LO + x * (HI - LO));
+}
+
+/** Name of whatever occupies a frequency: a band we decode, else a reference band. */
+export function bandAt(mhz: number): string | undefined {
+  return BANDS.find((b) => mhz >= b.lo - 1 && mhz <= b.hi + 1)?.name ?? REF_BANDS.find((b) => mhz >= b.lo && mhz <= b.hi)?.name;
+}
