@@ -46,10 +46,10 @@ export function App() {
   return (
     <div className="page">
       <header className="top">
-        <svg className="logo" width="26" height="26" viewBox="0 0 28 28" role="img" aria-label={connected ? 'Airwaves, live' : 'Airwaves, reconnecting'}>
+        <svg className="logo" width="28" height="28" viewBox="0 0 32 32" role="img" aria-label={connected ? 'Airwaves, live' : 'Airwaves, reconnecting'}>
           <title>Airwaves</title>
-          <circle cx="14" cy="14" r="3" fill={connected ? '#4ade80' : '#8b93a1'} />
-          <path d="M8 8 A8.5 8.5 0 0 0 8 20 M20 8 A8.5 8.5 0 0 1 20 20 M4 4 A14 14 0 0 0 4 24 M24 4 A14 14 0 0 1 24 24" fill="none" stroke="#e6e9ee" strokeWidth="2" strokeLinecap="round" />
+          <circle cx="16" cy="16" r="3.2" fill={connected ? '#4ade80' : '#8b93a1'} />
+          <path d="M11.76 11.76 A6 6 0 0 0 11.76 20.24 M20.24 11.76 A6 6 0 0 1 20.24 20.24 M8.22 8.22 A11 11 0 0 0 8.22 23.78 M23.78 8.22 A11 11 0 0 1 23.78 23.78" fill="none" stroke="#e6e9ee" strokeWidth="2.2" strokeLinecap="round" />
         </svg>
         <RotationStrip snapshot={view} expanded={dialOpen} onToggle={toggle} />
         {stale && <span className="muted top-time">Last updated {ago(snapshot.publishedAt, Date.now())}</span>}
