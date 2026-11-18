@@ -197,6 +197,7 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
   useEffect(() => {
     const m = new MlMap({ container: el.current!, style: STYLE, center: [-77.03, 38.9], zoom: 8.6, attributionControl: { compact: true } });
     map.current = m;
+    let pulse = 0;
     // MapLibre opens the compact attribution ("ⓘ") by default, covering the map's corner.
     // Start it collapsed; the button still opens it.
     const collapseAttribution = () => m.getContainer().querySelector('.maplibregl-ctrl-attrib.maplibregl-compact-show')?.classList.remove('maplibregl-compact-show');
@@ -211,7 +212,7 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
       m.addSource('balloons', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       m.addLayer({ id: 'rings', type: 'line', source: 'rings', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#3a4659', 'line-width': 1, 'line-dasharray': [2, 3] } });
       m.addLayer({ id: 'ring-labels', type: 'symbol', source: 'rings', filter: ['has', 'label'], layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 10, 'text-offset': [0, -0.8] }, paint: { 'text-color': '#8b93a1' } });
-      m.addLayer({ id: 'home-halo', type: 'circle', source: 'rings', filter: ['has', 'home'], paint: { 'circle-radius': 14, 'circle-color': '#4ade80', 'circle-opacity': 0.15 } });
+      m.addLayer({ id: 'home-halo', type: 'circle', source: 'rings', filter: ['has', 'home'], paint: { 'circle-radius': 14, 'circle-color': '#4ade80', 'circle-opacity': 0.15, 'circle-radius-transition': { duration: 0 }, 'circle-opacity-transition': { duration: 0 } } });
       m.addLayer({ id: 'home', type: 'circle', source: 'rings', filter: ['has', 'home'], paint: { 'circle-radius': 5, 'circle-color': '#4ade80' } });
       m.addLayer({ id: 'aids', type: 'circle', source: 'sea', filter: ['!=', ['get', 'kind'], 'ship'], paint: { 'circle-radius': 4, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': '#3cc9b4', 'circle-stroke-width': 1.5 } });
       m.addLayer({ id: 'aid-labels', type: 'symbol', source: 'sea', filter: ['!=', ['get', 'kind'], 'ship'], layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': ['interpolate', ['linear'], ['zoom'], 7, 9, 11, 11], 'text-offset': [0.8, 0], 'text-anchor': 'left', 'text-optional': true }, paint: { 'text-color': '#3cc9b4', 'text-halo-color': '#0b0e13', 'text-halo-width': 1.2 } });
@@ -254,8 +255,23 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
         },
       });
       setReady(true);
+      // Subtle pulse on the listening dot: the halo grows and fades every 2.4 s.
+      if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        const tick = (t: number) => {
+          const p = (t % 2400) / 2400;
+          if (m.getLayer('home-halo')) {
+            m.setPaintProperty('home-halo', 'circle-radius', 6 + 16 * p);
+            m.setPaintProperty('home-halo', 'circle-opacity', 0.35 * (1 - p));
+          }
+          pulse = requestAnimationFrame(tick);
+        };
+        pulse = requestAnimationFrame(tick);
+      }
     });
-    return () => m.remove();
+    return () => {
+      cancelAnimationFrame(pulse);
+      m.remove();
+    };
   }, []);
 
   useEffect(() => {
