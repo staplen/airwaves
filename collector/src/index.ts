@@ -10,6 +10,7 @@ import { ClipWatcher, type Clip } from './clips.ts';
 import { parseSame } from './eas.ts';
 import { ingestSpectrum, purgeOldFiles, SPECTRUM_BINS } from './housekeeping.ts';
 import { ingestHdRadio } from './hdradio.ts';
+import { approxHome, randomOffset, type Offset } from './privacy.ts';
 import { readOverlays } from './overlays.ts';
 import { Publisher } from './publisher.ts';
 import { SondeTracker } from './sonde.ts';
@@ -150,10 +151,11 @@ function slotFailure(id: string, now: number): string | undefined {
   return f && now - f.at < loopMs ? `Slot failed: ${f.reason}` : undefined;
 }
 
-// ---- public view: no home location, no distances --------------------------------------------
+// ---- public view: approximate home location, no distances -----------------------------------
+let publicOffset: Offset | undefined; // set in loadState
 const DISTANCE_TEXT = /,?\s*(?:at\s+)?[\d.]+\s*nm\b/g;
 function publicSnapshot(s: Snapshot): Snapshot {
-  return { ...s, home: undefined, aircraft: s.aircraft.map((a) => ({ ...a, distNm: undefined })), stats: { ...s.stats, maxRangeNm: 0 } };
+  return { ...s, home: s.home && publicOffset ? approxHome(s.home, publicOffset) : undefined, aircraft: s.aircraft.map((a) => ({ ...a, distNm: undefined })), stats: { ...s.stats, maxRangeNm: 0 } };
 }
 function publicItem(f: FeedItem): FeedItem {
   return f.kind === 'Aircraft' ? { ...f, body: f.body.replace(DISTANCE_TEXT, '') } : f;
@@ -589,6 +591,11 @@ function loadState() {
   for (const v of store.getState<Vessel[]>('vessels') ?? []) if (v.lastSeen > day) vessels.set(v.mmsi, v);
   for (const f of store.getState<AisFixed[]>('aisFixed') ?? []) aisFixed.set(f.mmsi, f);
   adsb.home ??= store.getState('home');
+  publicOffset = store.getState<Offset>('publicOffset');
+  if (!publicOffset) {
+    publicOffset = randomOffset();
+    store.setState('publicOffset', publicOffset);
+  }
   for (const r of store.getState<RadioStation[]>('radio') ?? []) if (r.updatedAt > day) radio.set(r.key, r);
   for (const b of store.getState<Balloon[]>('balloons') ?? []) if (b.lastSeen > day) sondes.flights.set(b.id, b);
 }

@@ -5,6 +5,7 @@ export type Family = 'air' | 'sea' | 'wx' | 'home' | 'bcast';
 export interface Home {
   lat: number;
   lon: number;
+  approx?: boolean; // public site: snapped and shifted a few km; draw as a soft area, not a pin
 }
 
 export interface Aircraft {
