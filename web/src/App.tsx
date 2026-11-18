@@ -3,7 +3,6 @@ import { About } from './components/About.tsx';
 import { Dial } from './components/Dial.tsx';
 import { Feed } from './components/Feed.tsx';
 import { MapView } from './components/MapView.tsx';
-import { RadioNow } from './components/RadioNow.tsx';
 import { RotationStrip } from './components/RotationStrip.tsx';
 import { Totals } from './components/Totals.tsx';
 import { isStatic } from './api.ts';
@@ -58,7 +57,6 @@ export function App() {
       </header>
       {dialOpen && <Dial snapshot={view} />}
       <Totals snapshot={view} />
-      <RadioNow snapshot={view} />
       <div className="main">
         <MapView snapshot={snapshot} />
         <Feed items={feed} />

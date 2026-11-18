@@ -561,7 +561,7 @@ async function ingestFiles() {
     // Post to the feed on a song change, or the first time we see a station today.
     if (titleChanged || !prev || localDay(prev.updatedAt) !== localDay(c.ts)) {
       const playing = c.title ? `${c.title}${c.artist ? ` — ${c.artist}` : ''}` : c.slogan ?? 'No song information';
-      publishFeed({ ts: c.ts, family: 'bcast', kind: 'Radio', title: `${st.name ?? `${c.freq} FM`} HD${c.program + 1}`, meta: c.freq, body: playing, image: art, clip });
+      publishFeed({ ts: c.ts, family: 'bcast', kind: 'Radio', title: `${st.name ?? `${c.freq} FM`} HD${c.program + 1}`, meta: c.freq, body: playing, image: art ?? st.logo, clip });
     }
   }
 }

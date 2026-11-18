@@ -226,7 +226,7 @@ export function Feed({ items }: { items: FeedItem[] }) {
         {shown.map((i) => (
           <article key={i.id} className="card catch">
             <div className="bar" style={{ background: FAMILY_COLOR[i.family] }} />
-            {i.image && <img className="catch-art" src={i.image} alt="" loading="lazy" width={56} height={56} />}
+            {i.image && !i.clip && <img className="catch-art" src={i.image} alt="" loading="lazy" width={56} height={56} />}
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="catch-head">
                 <span className="catch-kind" style={{ color: FAMILY_COLOR[i.family] }}>{highlight(i.kind, words)}</span>
@@ -240,7 +240,12 @@ export function Feed({ items }: { items: FeedItem[] }) {
                   <code>{i.raw}</code>
                 </details>
               )}
-              {i.clip && Date.now() - i.ts < CLIP_RETENTION_MS && <ClipPlayer src={i.clip} color={FAMILY_COLOR[i.family]} label={`${i.title} clip`} />}
+              {i.clip && Date.now() - i.ts < CLIP_RETENTION_MS && (
+                <div className="clip-row">
+                  {i.image && <img className="clip-art" src={i.image} alt="" loading="lazy" width={52} height={52} />}
+                  <ClipPlayer src={i.clip} color={FAMILY_COLOR[i.family]} label={`${i.title} clip`} />
+                </div>
+              )}
               {i.clip && Date.now() - i.ts >= CLIP_RETENTION_MS && <span className="muted" style={{ fontSize: 12 }}>Clip expired (audio is kept for 24 hours)</span>}
             </div>
           </article>
