@@ -6,7 +6,7 @@ import { flightName, translateAcars } from '../src/acars.ts';
 import { parseRtl433 } from '../src/rtl433.ts';
 import { parseSame } from '../src/eas.ts';
 import { SondeTracker } from '../src/sonde.ts';
-import { parseHdLog } from '../src/hdradio.ts';
+import { baseName, parseHdLog } from '../src/hdradio.ts';
 
 const near = (a: number | undefined, b: number, eps = 0.01) => assert.ok(a !== undefined && Math.abs(a - b) < eps, `${a} not within ${eps} of ${b}`);
 
@@ -126,4 +126,10 @@ test('HD Radio log finds the album art LOT and trims the station name', () => {
   assert.equal(r.artLot, 40445);
   assert.equal(r.lots.length, 3);
   assert.deepEqual(r.lots.find((l) => l.lot === 40445), { lot: 40445, port: '0802', name: 'WIHTHD029dfd.jpg' });
+});
+
+test('nrsc5 dump names carry the LOT id prefix', () => {
+  assert.equal(baseName('40448_WIHTHD029e00.jpg'), 'WIHTHD029e00.jpg');
+  assert.equal(baseName('50015_SLWIHT$$0111270000.png'), 'SLWIHT$$0111270000.png');
+  assert.equal(baseName('883_TMT_03ggta_3_3_20261118_1524_0373.png'), 'TMT_03ggta_3_3_20261118_1524_0373.png');
 });

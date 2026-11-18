@@ -101,7 +101,9 @@ export async function ingestHdRadio(dir: string, artDir: string, clipsRadioDir?:
 }
 
 const IMAGE = /\.(jpe?g|png)$/i;
-const MAP_FILE = /^(TMT_|DWRI?_|DWR)/i;
+const MAP_FILE = /^(TMT_|TMI_|DWRI?_|DWR)/i;
+/** nrsc5 --dump-aas-files saves each file as "<lot>_<name>"; this returns the broadcast name. */
+export const baseName = (f: string) => f.replace(/^\d+_/, '');
 
 /**
  * Picks album art (the file named by the song's LOT entry) and the station logo (newest SL* file) out of
@@ -118,15 +120,17 @@ async function collectImages(aasDir: string, artDir: string, prefix: string, art
   const ext = (f: string) => f.slice(f.lastIndexOf('.')).toLowerCase();
   let logoBest: { f: string; t: number } | undefined;
   for (const f of files) {
-    if (MAP_FILE.test(f) || !/^SL/i.test(f) || !IMAGE.test(f)) continue;
+    const b = baseName(f);
+    if (MAP_FILE.test(b) || !/^SL/i.test(b) || !IMAGE.test(b)) continue;
     const t = (await stat(join(aasDir, f))).mtimeMs;
     if (!logoBest || t > logoBest.t) logoBest = { f, t };
   }
   const res: { image?: string; logo?: string } = {};
-  if (artName && files.includes(artName) && IMAGE.test(artName) && !MAP_FILE.test(artName)) {
-    const t = (await stat(join(aasDir, artName))).mtimeMs;
-    res.image = `${prefix}_${Math.round(t)}${ext(artName)}`;
-    await copyFile(join(aasDir, artName), join(artDir, res.image));
+  const artFile = artName && IMAGE.test(artName) && !MAP_FILE.test(artName) ? files.find((f) => baseName(f) === artName) : undefined;
+  if (artFile) {
+    const t = (await stat(join(aasDir, artFile))).mtimeMs;
+    res.image = `${prefix}_${Math.round(t)}${ext(artFile)}`;
+    await copyFile(join(aasDir, artFile), join(artDir, res.image));
   }
   if (logoBest) {
     res.logo = `${prefix}_logo_${Math.round(logoBest.t)}${ext(logoBest.f)}`;
@@ -134,10 +138,10 @@ async function collectImages(aasDir: string, artDir: string, prefix: string, art
   }
   for (const f of files) {
     const from = join(aasDir, f);
-    if (MAP_FILE.test(f)) {
+    if (MAP_FILE.test(baseName(f))) {
       try {
         await mkdir(mapsDir, { recursive: true });
-        await copyFile(from, join(mapsDir, f));
+        await copyFile(from, join(mapsDir, baseName(f)));
       } catch {
         /* keep going; the original is removed below */
       }
