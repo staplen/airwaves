@@ -481,10 +481,11 @@ async function housekeeping() {
     ? (await purgeOldFiles(join(CLIPS_ROOT, 'atc'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'noaa'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'radio'), CLIP_RETENTION_MS, ['.mp3', '.wav']))
     : 0;
   const art = await purgeOldFiles(ART_DIR, CLIP_RETENTION_MS, ['.jpg', '.jpeg', '.png']);
+  const maps = await purgeOldFiles(join(HD_DIR, 'maps'), 86_400_000, ['.png', '.jpg', '.jpeg', '.txt', '.gif']);
   const cutoff = now - DB_RETENTION_DAYS * 86_400_000;
   const rows = store.purge(cutoff, localDay(cutoff));
   const removedRows = Object.values(rows).reduce((a, b) => a + b, 0);
-  if (files || art || removedRows) console.log(`housekeeping: ${files} clips and ${art} images deleted, rows removed ${JSON.stringify(rows)}`);
+  if (files || art || maps || removedRows) console.log(`housekeeping: ${files} clips and ${art + maps} images deleted, rows removed ${JSON.stringify(rows)}`);
   // Small in-memory maps: drop entries older than a day.
   for (const m of [lastVdl2PerFlight, lastSensorPost, lastAircraftSave]) for (const [k, t] of m) if (now - t > 86_400_000) m.delete(k);
   for (const [k, v] of vessels) if (now - v.lastSeen > 86_400_000) vessels.delete(k);
@@ -500,6 +501,7 @@ async function ingestFiles() {
     const key = `${c.freq}_${c.program}`;
     const prev = radio.get(key);
     const art = c.image ? `/api/art/${encodeURIComponent(c.image)}` : undefined;
+    const logo = c.logo ? `/api/art/${encodeURIComponent(c.logo)}` : undefined;
     const clip = c.clip ? `/api/clips/radio/${encodeURIComponent(c.clip)}` : undefined;
     const titleChanged = c.title !== undefined && c.title !== prev?.title;
     const st: RadioStation = {
@@ -512,6 +514,7 @@ async function ingestFiles() {
       artist: c.title !== undefined ? c.artist : prev?.artist,
       album: c.title !== undefined ? c.album : prev?.album,
       art: art ?? (titleChanged ? undefined : prev?.art),
+      logo: logo ?? prev?.logo,
       clip: clip ?? prev?.clip,
       updatedAt: c.ts,
       songAt: titleChanged ? c.ts : prev?.songAt,

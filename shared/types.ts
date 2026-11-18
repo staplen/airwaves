@@ -114,6 +114,7 @@ export interface RadioStation {
   artist?: string;
   album?: string;
   art?: string; // album art URL
+  logo?: string; // station logo URL
   clip?: string; // audio snippet URL
   updatedAt: number;
   songAt?: number; // when the current title was first seen

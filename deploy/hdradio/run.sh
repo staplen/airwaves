@@ -11,7 +11,7 @@ if [ "${#stations[@]}" -eq 0 ]; then
   exit 0
 fi
 SNIP="${HD_SNIPPET_SEC:-12}"
-SWEEP_MAX="${HD_SWEEP_MAX_SEC:-22}"
+SWEEP_MAX="${HD_SWEEP_MAX_SEC:-25}"
 NOSIG="${HD_NOSIGNAL_SEC:-10}"
 DWELL="${HD_DWELL_SEC:-60}"
 OUT=/out
@@ -69,9 +69,16 @@ for st in "${stations[@]}"; do
   while kill -0 "$CHILD" 2>/dev/null; do
     sleep 0.5
     el=$((SECONDS - start))
-    if grep -q "Station name:" "$log" 2>/dev/null && grep -q "Title:" "$log" 2>/dev/null; then
+    if grep -q "Title:" "$log" 2>/dev/null; then
       [ -n "$both" ] || both=$el
-      [ "$el" -ge $((SNIP + 3)) ] && break
+      if [ "$el" -ge $((SNIP + 3)) ]; then
+        # Stop once the album art for the latest XHDR lot has arrived, there is no art lot, or time is up.
+        artlot=$(grep "XHDR:" "$log" 2>/dev/null | tail -n 1 | awk '{print $NF}')
+        case "$artlot" in ''|*[!0-9]*) artlot=0 ;; esac
+        if [ "$artlot" -le 0 ] || grep -q "LOT file:.* lot=$artlot " "$log" 2>/dev/null || [ "$el" -ge "$SWEEP_MAX" ]; then
+          break
+        fi
+      fi
     elif [ "$el" -ge "$NOSIG" ] && ! grep -Eq "Station name:|Title:|Audio" "$log" 2>/dev/null; then
       break # no HD signal here
     fi

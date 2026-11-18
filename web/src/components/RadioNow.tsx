@@ -16,7 +16,7 @@ export function RadioNow({ snapshot }: { snapshot?: Snapshot }) {
           const playing = r.title ? `${r.title}${r.artist ? ` — ${r.artist}` : ''}` : r.slogan ?? 'No song information';
           return (
             <article key={r.key} className="radio-tile">
-              {r.art ? <img className="radio-art" src={r.art} alt="" loading="lazy" /> : <div className="radio-art ph" aria-hidden="true">{r.freq}</div>}
+              {r.art ?? r.logo ? <img className="radio-art" src={r.art ?? r.logo} alt="" loading="lazy" /> : <div className="radio-art ph" aria-hidden="true">{r.freq}</div>}
               <div className="radio-info">
                 <div className="radio-name">{r.name ?? `${r.freq} FM`}</div>
                 <div className="radio-sub">

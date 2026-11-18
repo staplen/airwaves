@@ -107,3 +107,23 @@ test('HD Radio log keeps the station and the last song', () => {
   assert.equal(r.artist, 'Band B');
   assert.equal(r.album, undefined);
 });
+
+test('HD Radio log finds the album art LOT and trims the station name', () => {
+  const r = parseHdLog(
+    [
+      '15:24:28 Station name: HOT ',
+      '15:24:30 Slogan: HOT 99.5',
+      '15:24:31 Title: Shy Girl',
+      '15:24:31 Artist: Haute & Freddy',
+      '15:24:31 XHDR: 0 BE4B7536 40445',
+      '15:24:49 LOT file: port=0802 lot=40445 name=WIHTHD029dfd.jpg size=5317 mime=1E653E9C expiry=2026-11-18T17:22:00Z',
+      '15:24:59 LOT file: port=0810 lot=896 name=TMT_03ggta_2_2_20261118_1514_0380.png size=6698 mime=4F328CA0 expiry=2026-11-18T15:47:00Z',
+      '15:25:19 LOT file: port=0820 lot=1171 name=DWRI_03ggta_rev06_0493.txt size=512 mime=BB492AAC expiry=2026-11-18T15:52:00Z',
+    ].join('\n'),
+  );
+  assert.equal(r.station, 'HOT');
+  assert.equal(r.title, 'Shy Girl');
+  assert.equal(r.artLot, 40445);
+  assert.equal(r.lots.length, 3);
+  assert.deepEqual(r.lots.find((l) => l.lot === 40445), { lot: 40445, port: '0802', name: 'WIHTHD029dfd.jpg' });
+});
