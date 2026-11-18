@@ -1,24 +1,42 @@
 {
-  "comment": "One dongle, rotating. Host paths are Home Assistant OS paths: /share = /mnt/data/supervisor/share, /media = /mnt/data/supervisor/media. ${VAR} is filled from the scheduler's environment; ${TS} is a UTC timestamp.",
+  "comment": "One dongle, rotating. Host paths are Home Assistant OS paths: /share = /mnt/data/supervisor/share, /media = /mnt/data/supervisor/media. ${VAR} comes from the scheduler's environment (airwaves.env); a --flag whose value is empty is dropped. ${TS} is a UTC timestamp. Times in windows are local (TIMEZONE). Images are pinned to tested versions.",
+  "standby": "ultrafeeder",
   "slots": [
-    { "id": "adsb", "name": "ADS-B", "freqMhz": 1090, "minutes": 3, "existing": "ultrafeeder" },
+    {
+      "id": "adsb", "name": "ADS-B", "freqMhz": 1090, "minutes": 3,
+      "image": "ghcr.io/sdr-enthusiasts/docker-adsb-ultrafeeder:latest-build-845",
+      "entrypoint": ["readsb"],
+      "cmd": ["--device-type", "rtlsdr", "--device", "0", "--gain", "49.6",
+              "--lat", "${HOME_LAT}", "--lon", "${HOME_LON}",
+              "--write-json", "/out", "--write-json-every", "1", "--quiet"],
+      "binds": ["/mnt/data/supervisor/share/airwaves/readsb:/out"]
+    },
     {
       "id": "atc", "name": "ATC", "freqMhz": 119.25, "minutes": 3,
       "image": "ghcr.io/rtl-airband/rtlsdr-airband:v7.0.1",
       "binds": [
         "/mnt/data/supervisor/share/airwaves/rtl_airband.conf:/app/rtl_airband.conf:ro",
         "/mnt/data/supervisor/media/airwaves/atc:/recordings"
-      ]
+      ],
+      "extendIfActive": { "withinSec": 30, "maxExtraMinutes": 2 }
     },
     {
       "id": "ais", "name": "Ships", "freqMhz": 162.0, "minutes": 3,
       "image": "ghcr.io/jvde-github/ais-catcher:v0.71",
       "cmd": ["-u", "127.0.0.1", "4100"]
     },
-    { "id": "adsb", "name": "ADS-B", "freqMhz": 1090, "minutes": 3, "existing": "ultrafeeder" },
+    {
+      "id": "adsb", "name": "ADS-B", "freqMhz": 1090, "minutes": 3,
+      "image": "ghcr.io/sdr-enthusiasts/docker-adsb-ultrafeeder:latest-build-845",
+      "entrypoint": ["readsb"],
+      "cmd": ["--device-type", "rtlsdr", "--device", "0", "--gain", "49.6",
+              "--lat", "${HOME_LAT}", "--lon", "${HOME_LON}",
+              "--write-json", "/out", "--write-json-every", "1", "--quiet"],
+      "binds": ["/mnt/data/supervisor/share/airwaves/readsb:/out"]
+    },
     {
       "id": "vdl2", "name": "Datalink", "freqMhz": 136.8, "minutes": 2,
-      "image": "ghcr.io/sdr-enthusiasts/docker-dumpvdl2:latest",
+      "image": "ghcr.io/sdr-enthusiasts/docker-dumpvdl2:latest-build-443",
       "entrypoint": ["dumpvdl2"],
       "cmd": ["--rtlsdr", "0", "--gain", "44.5", "--correction", "0",
               "--output", "decoded:json:udp:address=127.0.0.1,port=4101",
@@ -26,8 +44,9 @@
     },
     {
       "id": "ism", "name": "Sensors", "freqMhz": 315, "minutes": 3,
-      "image": "hertzg/rtl_433:latest",
-      "cmd": ["-f", "315M", "-f", "433.92M", "-f", "915M", "-H", "60",
+      "image": "hertzg/rtl_433:25.12",
+      "comment": "915 MHz is listed twice so meters get half the slot; 45 s per hop.",
+      "cmd": ["-f", "315M", "-f", "433.92M", "-f", "915M", "-f", "915M", "-H", "45",
               "-F", "mqtt://127.0.0.1:1883,user=${MQTT_USER},pass=${MQTT_PASS},retain=0,events=airwaves/rtl_433"]
     },
     {
@@ -37,8 +56,33 @@
       "env": ["MQTT_USER=${MQTT_USER}", "MQTT_PASS=${MQTT_PASS}"]
     },
     {
+      "id": "noaa", "name": "NOAA weekly test", "freqMhz": 162.45, "minutes": 6,
+      "comment": "Extra NOAA time Wednesday late morning, when the required weekly test usually airs.",
+      "windows": [{ "days": [3], "start": "10:45", "end": "12:15" }],
+      "image": "airwaves-noaa:local",
+      "binds": ["/mnt/data/supervisor/media/airwaves/noaa:/out"],
+      "env": ["MQTT_USER=${MQTT_USER}", "MQTT_PASS=${MQTT_PASS}"]
+    },
+    {
+      "id": "sonde", "name": "Weather balloon", "freqMhz": 403, "minutes": 5,
+      "comment": "Twice-daily NWS launches (about 6 AM / 6 PM Eastern) and their ~2-hour flights.",
+      "windows": [{ "start": "05:45", "end": "08:30" }, { "start": "17:45", "end": "20:30" }],
+      "image": "ghcr.io/projecthorus/radiosonde_auto_rx:v1.9.0",
+      "binds": [
+        "/mnt/data/supervisor/share/airwaves/sonde/station.cfg:/opt/auto_rx/station.cfg:ro",
+        "/mnt/data/supervisor/share/airwaves/sonde/log:/opt/auto_rx/log"
+      ]
+    },
+    {
+      "id": "hdradio", "name": "HD Radio", "freqMhz": 98, "minutes": 2, "everyLoops": 3, "runsOnce": true,
+      "image": "airwaves-hdradio:local",
+      "binds": ["/mnt/data/supervisor/share/airwaves/hdradio:/out"],
+      "env": ["HD_STATIONS=${HD_STATIONS}"]
+    },
+    {
       "id": "spectrum", "name": "Spectrum", "freqMhz": 500, "minutes": 1,
-      "image": "ghcr.io/sdr-enthusiasts/docker-adsb-ultrafeeder:latest",
+      "runsOnce": true,
+      "image": "ghcr.io/sdr-enthusiasts/docker-adsb-ultrafeeder:latest-build-845",
       "entrypoint": ["rtl_power"],
       "cmd": ["-f", "88M:1100M:250k", "-g", "44.5", "-i", "15", "-1", "/out/spectrum_${TS}.csv"],
       "binds": ["/mnt/data/supervisor/share/airwaves/spectrum:/out"]

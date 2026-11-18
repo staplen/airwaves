@@ -44,6 +44,22 @@ export interface AisFixed {
   lastSeen: number;
 }
 
+/** A weather balloon (radiosonde) flight. */
+export interface Balloon {
+  id: string; // serial number, e.g. S3420157
+  model?: string;
+  freqMhz?: number;
+  lat: number;
+  lon: number;
+  altM: number;
+  maxAltM: number;
+  vertMps?: number;
+  burst: boolean;
+  firstSeen: number;
+  lastSeen: number;
+  track: [number, number][]; // [lon, lat], oldest first
+}
+
 /** A signal source (decoder slot) and how fresh its data is. */
 export interface SourceStatus {
   id: string;
@@ -61,6 +77,7 @@ export interface SchedulerState {
   current?: { slotId: string; freqMhz: number; since: number; endsAt: number };
   upNext: { slotId: string; minutes: number }[];
   slots?: string[]; // every slot id in the loop
+  failures?: Record<string, { at: number; reason: string }>; // last failure per slot
   loopMinutes: number;
   updatedAt: number;
 }
@@ -83,6 +100,7 @@ export interface FeedItem {
   mono?: boolean;
   clip?: string; // audio URL for ATC / weather radio clips
   raw?: string; // original decoded text, when the body is a translation
+  image?: string; // e.g. HD Radio album art URL
 }
 
 export interface Totals {
@@ -103,6 +121,13 @@ export interface Snapshot {
   aircraft: Aircraft[];
   vessels: Vessel[];
   aisFixed: AisFixed[];
+  balloons: Balloon[];
   totals: Totals;
   stats: { maxRangeNm: number; avgRssi?: number };
+}
+
+/** Spectrum heatmap rows: strongest level per log-spaced bin (80–1150 MHz) per hour. */
+export interface SpectrumHeat {
+  bins: number;
+  rows: { hour: number; db: (number | null)[] }[]; // hour = epoch hours, oldest first
 }

@@ -35,6 +35,23 @@ export class Docker {
     if (p.status !== 200) throw new Error(`pull ${image} failed: ${p.status} ${p.data.slice(0, 200)}`);
   }
 
+  /** Container state, or undefined if it doesn't exist. */
+  async state(name: string): Promise<{ running: boolean; exitCode: number; error: string } | undefined> {
+    const r = await this.call('GET', `/containers/${encodeURIComponent(name)}/json`);
+    if (r.status !== 200) return undefined;
+    const st = JSON.parse(r.data).State ?? {};
+    return { running: Boolean(st.Running), exitCode: Number(st.ExitCode ?? 0), error: String(st.Error ?? '') };
+  }
+
+  /** Last lines of a container's output (stdout+stderr), with Docker's stream framing removed. */
+  async logs(name: string, tail = 15): Promise<string> {
+    const r = await this.call('GET', `/containers/${encodeURIComponent(name)}/logs?stdout=1&stderr=1&tail=${tail}`);
+    if (r.status !== 200) return '';
+    // Non-TTY logs are framed: 8-byte header (stream, 0, 0, 0, size BE) + payload. The
+    // payload is printable text, so dropping the header bytes is enough for a summary.
+    return r.data.replace(/[\u0000-\u0008\u000e-\u001f]/g, '').trim();
+  }
+
   async isRunning(name: string): Promise<boolean> {
     const r = await this.call('GET', `/containers/${encodeURIComponent(name)}/json`);
     if (r.status !== 200) return false;

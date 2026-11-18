@@ -20,6 +20,14 @@ const AIRPORTS: Record<string, string> = {
   KLAX: 'Los Angeles', KSFO: 'San Francisco', KSEA: 'Seattle', KLAS: 'Las Vegas', KPHX: 'Phoenix', KSAN: 'San Diego',
   KRIC: 'Richmond', KORF: 'Norfolk', KBDL: 'Hartford', KPVD: 'Providence', KBUF: 'Buffalo', KSYR: 'Syracuse',
   KALB: 'Albany', KMSY: 'New Orleans', KAUS: 'Austin', KSAT: 'San Antonio', KSLC: 'Salt Lake City', KSJU: 'San Juan',
+  KSDF: 'Louisville', KCVG: 'Cincinnati', KIND: 'Indianapolis', KMCI: 'Kansas City', KMEM: 'Memphis', KJAX: 'Jacksonville',
+  KRSW: 'Fort Myers', KPBI: 'West Palm Beach', KSAV: 'Savannah', KCHS: 'Charleston', KGSO: 'Greensboro',
+  KPWM: 'Portland, ME', KBTV: 'Burlington', KMHT: 'Manchester', KISP: 'Islip', KHPN: 'White Plains', KSWF: 'Newburgh',
+  KABE: 'Allentown', KMDT: 'Harrisburg', KAVP: 'Scranton', KROA: 'Roanoke', KCHO: 'Charlottesville', KLYH: 'Lynchburg',
+  KHGR: 'Hagerstown', KSBY: 'Salisbury', KPHF: 'Newport News', KILM: 'Wilmington', KMYR: 'Myrtle Beach', KOMA: 'Omaha',
+  KMKE: 'Milwaukee', KOKC: 'Oklahoma City', KTUL: 'Tulsa', KABQ: 'Albuquerque', KBOI: 'Boise', KPDX: 'Portland',
+  KSMF: 'Sacramento', KSJC: 'San Jose', KOAK: 'Oakland', KSNA: 'Santa Ana', KONT: 'Ontario', KBUR: 'Burbank',
+  KELP: 'El Paso', KMSN: 'Madison', KDSM: 'Des Moines', KGRR: 'Grand Rapids', KBHM: 'Birmingham', KLIT: 'Little Rock',
   TJSJ: 'San Juan', CYUL: 'Montreal', CYYZ: 'Toronto', CYOW: 'Ottawa', EGLL: 'London Heathrow', LFPG: 'Paris CDG',
   EDDF: 'Frankfurt', EHAM: 'Amsterdam', EIDW: 'Dublin', LTFM: 'Istanbul', OTHH: 'Doha', OMDB: 'Dubai',
 };
@@ -119,13 +127,35 @@ export function translateAcars(label: string | undefined, text: string): Transla
   m = t.match(/^\d{6}\s+([A-Z]{3})\s+([A-Z]{3})\d?\b/);
   if (m && IATA[m[1]] && IATA[m[2]]) return { headline: `Route ${airport(m[1])} → ${airport(m[2])}.` };
 
+  // Weather reports and forecasts relayed to the cockpit.
+  m = t.match(/\b(METAR|SPECI)\s+([A-Z]{4})\b/);
+  if (m) return { headline: `Received the latest weather report for ${airport(m[2])}.` };
+  m = t.match(/\bTAF\s+(?:AMD\s+)?([A-Z]{4})\b/);
+  if (m) return { headline: `Received the weather forecast for ${airport(m[1])}.` };
+
+  // Departure clearance, load sheet, gate assignment.
+  m = t.match(/\b(?:CLRD|CLEARED)\s+TO\s+([A-Z]{3,4})\b/);
+  if (m || /\bPDC\b/.test(t)) return { headline: m ? `Received its departure clearance to ${airport(m[1])}.` : 'Received its pre-departure clearance.' };
+  if (/LOAD\s?SHEET|\bZFW\b|\bTOW\b.*\bLAW\b/.test(t)) return { headline: 'Received its load sheet (passenger, cargo and fuel weights for takeoff).' };
+  m = t.match(/\bGATE\s*:?\s*([A-Z]?\d{1,3}[A-Z]?)\b/);
+  if (m) return { headline: `Gate information: gate ${m[1]}.` };
+
+  // Automated maintenance and engine-health reports (MDC, ACMF, CMC, APM…): say what they are, not their contents.
+  if (/\b(MDC|ACMF|CMC|APM_REPORT|AHM|FDAMS|FAULT|SNAPSHOT|PN:|FILENAME|ENG(?:INE)?\s+(?:TREND|REPORT)|SWVER)\b/.test(t)) {
+    const what = t.match(/REPORT:\s*([A-Z][A-Z ]{3,40})/)?.[1]?.trim().toLowerCase();
+    return { headline: `Sent an automated maintenance report to the airline${what ? ` (${what})` : ''}.` };
+  }
+
   // Skip routine acknowledgements and performance telemetry we can't read.
   if (/^(RESREQ|PER\/|REJ|ACK)/.test(t)) return undefined;
   if (label && ['32', '36', '37', '4N', 'H2', 'SA', '_d', 'Q0'].includes(label)) return undefined;
-  const letters = (t.match(/[A-Za-z]/g) ?? []).length;
-  const words = t.split(/\s+/).filter((w) => /^[A-Za-z]{3,}$/.test(w)).length;
-  if (letters / t.length < 0.4 || words < 2) return undefined;
-  return { headline: t.length > 160 ? `${t.slice(0, 157)}…` : t };
+  // Anything else: keep it only if it reads like a sentence (crew/dispatch free text), as a quote.
+  const firstLine = t.split('\n').map((l) => l.trim()).find((l) => l && !/^PAGE\s+\d+/i.test(l)) ?? '';
+  const words = firstLine.split(/\s+/).filter((w) => /^[A-Za-z']{2,}[.,!?]?$/.test(w));
+  const symbols = (firstLine.match(/[^A-Za-z0-9\s.,'!?-]/g) ?? []).length;
+  if (words.length < 4 || words.length / firstLine.split(/\s+/).length < 0.6 || symbols > 3) return undefined;
+  const quote = firstLine.length > 120 ? `${firstLine.slice(0, 117)}…` : firstLine;
+  return { headline: `Text message: "${quote.charAt(0) + quote.slice(1).toLowerCase()}"` };
 }
 
 /** Plain-English CPDLC replies and common instructions. */

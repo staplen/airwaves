@@ -45,6 +45,9 @@ export class ClipWatcher {
       } catch {
         continue;
       }
+      // Forget files that have been purged, so memory doesn't grow with every clip ever seen.
+      const present = new Set(files.map((f) => `${name}/${f}`));
+      for (const key of this.seen) if (key.startsWith(`${name}/`) && !present.has(key)) this.seen.delete(key);
       for (const file of files) {
         const key = `${name}/${file}`;
         if (this.seen.has(key)) continue;

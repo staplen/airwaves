@@ -4,9 +4,8 @@ import { Map as MlMap, setWorkerUrl, type GeoJSONSource } from 'maplibre-gl';
 // Let Vite bundle the worker (with its shared chunk) and hand MapLibre the URL.
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { Aircraft, AisFixed, Home, Snapshot, Vessel } from '../../../shared/types.ts';
+import type { Aircraft, AisFixed, Balloon, Home, Snapshot, Vessel } from '../../../shared/types.ts';
 import { ago } from '../live.ts';
-import { FreshnessRing } from './FreshnessRing.tsx';
 
 const STYLE = 'https://tiles.openfreemap.org/styles/dark';
 setWorkerUrl(workerUrl);
@@ -63,6 +62,20 @@ function vesselsFC(list: Vessel[], fixed: AisFixed[], now: number): FC {
   return { type: 'FeatureCollection', features: [...ships, ...aids] };
 }
 
+function balloonsFC(list: Balloon[]): FC {
+  const features: GeoJSON.Feature[] = [];
+  for (const b of list) {
+    if (b.track.length > 1) features.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: b.track }, properties: {} });
+    const arrow = b.vertMps !== undefined && b.vertMps < 0 ? '↓' : '↑';
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [b.lon, b.lat] },
+      properties: { label: `${b.id} · ${(b.altM / 1000).toFixed(1)} km ${arrow}${b.burst ? ' · burst' : ''}` },
+    });
+  }
+  return { type: 'FeatureCollection', features };
+}
+
 function fmtAlt(a: Aircraft): string {
   if (a.altBaro === 'ground') return 'GND';
   if (a.altBaro === undefined) return '';
@@ -104,9 +117,6 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<MlMap>(null);
   const [ready, setReady] = useState(false);
-  const [showPlanes, setShowPlanes] = useState(true);
-  const [showRings, setShowRings] = useState(true);
-  const [showShips, setShowShips] = useState(true);
   const centered = useRef(false);
 
   useEffect(() => {
@@ -118,6 +128,7 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
       m.addSource('sea', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       m.addSource('rings', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       m.addSource('aircraft', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      m.addSource('balloons', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       m.addLayer({ id: 'rings', type: 'line', source: 'rings', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#3a4659', 'line-width': 1, 'line-dasharray': [2, 3] } });
       m.addLayer({ id: 'ring-labels', type: 'symbol', source: 'rings', filter: ['has', 'label'], layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 10, 'text-offset': [0, -0.8] }, paint: { 'text-color': '#8b93a1' } });
       m.addLayer({ id: 'home-halo', type: 'circle', source: 'rings', filter: ['has', 'home'], paint: { 'circle-radius': 14, 'circle-color': '#4ade80', 'circle-opacity': 0.15 } });
@@ -132,6 +143,9 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
         layout: { 'icon-image': 'ship', 'icon-size': 0.7, 'icon-rotate': ['get', 'cog'], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': true, 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 10, 'text-offset': [1.1, 0], 'text-anchor': 'left', 'text-optional': true },
         paint: { 'icon-color': '#3cc9b4', 'icon-opacity': ['case', ['get', 'stale'], 0.4, 1], 'text-color': '#3cc9b4', 'text-halo-color': '#0b0e13', 'text-halo-width': 1.2 },
       });
+      m.addLayer({ id: 'balloon-tracks', type: 'line', source: 'balloons', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#f5b547', 'line-width': 2, 'line-dasharray': [2, 2] } });
+      m.addLayer({ id: 'balloons', type: 'circle', source: 'balloons', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 6, 'circle-color': '#f5b547', 'circle-stroke-color': '#0b0e13', 'circle-stroke-width': 1.5 } });
+      m.addLayer({ id: 'balloon-labels', type: 'symbol', source: 'balloons', filter: ['==', ['geometry-type'], 'Point'], layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 11, 'text-offset': [0.9, 0], 'text-anchor': 'left' }, paint: { 'text-color': '#f5b547', 'text-halo-color': '#0b0e13', 'text-halo-width': 1.2 } });
       m.addLayer({
         id: 'aircraft',
         type: 'symbol',
@@ -168,6 +182,7 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
     const m = map.current;
     if (!ready || !m || !snapshot) return;
     (m.getSource('aircraft') as GeoJSONSource).setData(aircraftFC(snapshot.aircraft));
+    (m.getSource('balloons') as GeoJSONSource).setData(balloonsFC(snapshot.balloons ?? []));
     (m.getSource('sea') as GeoJSONSource).setData(vesselsFC(snapshot.vessels, snapshot.aisFixed, snapshot.now));
     if (snapshot.home) {
       (m.getSource('rings') as GeoJSONSource).setData(ringsFC(snapshot.home));
@@ -178,47 +193,20 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
     }
   }, [ready, snapshot]);
 
-  useEffect(() => {
-    const m = map.current;
-    if (!ready || !m) return;
-    m.setLayoutProperty('aircraft', 'visibility', showPlanes ? 'visible' : 'none');
-    for (const id of ['rings', 'ring-labels']) m.setLayoutProperty(id, 'visibility', showRings ? 'visible' : 'none');
-    for (const id of ['ships', 'aids', 'aid-labels']) m.setLayoutProperty(id, 'visibility', showShips ? 'visible' : 'none');
-  }, [ready, showPlanes, showRings, showShips]);
 
   const now = snapshot?.now ?? Date.now();
   const adsb = snapshot?.sources.find((s) => s.id === 'adsb');
-  const heardAge = adsb?.lastHeard ? (now - adsb.lastHeard) / 1000 : Infinity;
-  const placed = snapshot?.aircraft.filter((a) => a.lat !== undefined).length ?? 0;
-  const ais = snapshot?.sources.find((s) => s.id === 'ais');
 
   return (
     <section className="card mapcard" aria-label="Map">
       <div ref={el} style={{ position: 'absolute', inset: 0 }} />
-      <div className="overlay-tl">
-        <button type="button" className="tog" aria-pressed={showPlanes} onClick={() => setShowPlanes((v) => !v)}>
-          <span className="dot" style={{ background: 'var(--air)' }} />Aircraft <span className="mono muted">{placed}</span>
-        </button>
-        <button type="button" className="tog" aria-pressed={showShips} onClick={() => setShowShips((v) => !v)}>
-          <span className="dot" style={{ background: 'var(--sea)' }} />Ships <span className="mono muted">{snapshot?.vessels.length ?? 0}</span>
-        </button>
-        <button type="button" className="tog" aria-pressed={false} disabled title="Balloons appear once the radiosonde slot runs">
-          <span className="dot" style={{ background: 'var(--wx)' }} />Balloon
-        </button>
-        <button type="button" className="tog" aria-pressed={showRings} onClick={() => setShowRings((v) => !v)}>Rings</button>
-      </div>
-      <div className="overlay-tr">
-        <span className="tog">
-          <FreshnessRing fraction={adsb?.error ? 0 : 1 - heardAge / 600} color="var(--air)" />
-          {adsb?.error ? <span style={{ color: 'var(--wx)' }}>Receiver unreachable{adsb.lastHeard ? ` · last heard ${ago(adsb.lastHeard, now)}` : ''}</span> : <>Aircraft {ago(adsb?.lastHeard, now)}</>}
-        </span>
-        {ais?.running && (
-          <span className="tog">
-            <FreshnessRing fraction={ais.lastHeard ? 1 - (now - ais.lastHeard) / 1_200_000 : 0} color="var(--sea)" />
-            Ships {ago(ais.lastHeard, now)}
+      {adsb?.error && (
+        <div className="overlay-tr">
+          <span className="tog" style={{ color: 'var(--wx)' }}>
+            Receiver unreachable{adsb.lastHeard ? ` · last heard ${ago(adsb.lastHeard, now)}` : ''}
           </span>
-        )}
-      </div>
+        </div>
+      )}
       <div className="overlay-b">
         <div className="tog" style={{ gap: 16 }}>
           <span><b className="mono">{snapshot ? snapshot.stats.maxRangeNm.toFixed(0) : '—'}</b> <span className="muted">nm range</span></span>

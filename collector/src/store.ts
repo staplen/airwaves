@@ -9,6 +9,7 @@ export class Store {
     this.db = new DatabaseSync(path);
     this.db.exec(`
       PRAGMA journal_mode = WAL;
+      PRAGMA synchronous = NORMAL; -- fewer fsyncs: kinder to the SD card, still crash-safe with WAL
       CREATE TABLE IF NOT EXISTS feed (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ts INTEGER NOT NULL,
@@ -39,6 +40,15 @@ export class Store {
         last_seen INTEGER NOT NULL,
         PRIMARY KEY (day, hex)
       );
+      -- Small JSON blobs that should survive restarts (ships, buoys, home location).
+      CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      -- Spectrum: strongest level per frequency bin per hour, kept for 7 days.
+      CREATE TABLE IF NOT EXISTS spectrum (
+        hour INTEGER NOT NULL,
+        bin INTEGER NOT NULL,
+        db REAL NOT NULL,
+        PRIMARY KEY (hour, bin)
+      );
     `);
     this.migrate();
   }
@@ -47,12 +57,13 @@ export class Store {
     const cols = (this.db.prepare('PRAGMA table_info(feed)').all() as { name: string }[]).map((c) => c.name);
     if (!cols.includes('clip')) this.db.exec('ALTER TABLE feed ADD COLUMN clip TEXT');
     if (!cols.includes('raw')) this.db.exec('ALTER TABLE feed ADD COLUMN raw TEXT');
+    if (!cols.includes('image')) this.db.exec('ALTER TABLE feed ADD COLUMN image TEXT');
   }
 
   addFeed(item: Omit<FeedItem, 'id'>): FeedItem {
     const r = this.db
-      .prepare('INSERT INTO feed (ts, family, kind, title, meta, body, mono, clip, raw) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(item.ts, item.family, item.kind, item.title, item.meta, item.body, item.mono ? 1 : 0, item.clip ?? null, item.raw ?? null);
+      .prepare('INSERT INTO feed (ts, family, kind, title, meta, body, mono, clip, raw, image) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(item.ts, item.family, item.kind, item.title, item.meta, item.body, item.mono ? 1 : 0, item.clip ?? null, item.raw ?? null, item.image ?? null);
     return { ...item, id: Number(r.lastInsertRowid) };
   }
 
@@ -70,6 +81,7 @@ export class Store {
       body: String(r.body),
       mono: r.mono === 1,
       clip: typeof r.clip === 'string' ? r.clip : undefined,
+      image: typeof r.image === 'string' ? r.image : undefined,
       raw: typeof r.raw === 'string' ? r.raw : undefined,
     }));
   }
@@ -114,6 +126,55 @@ export class Store {
       .prepare('SELECT COUNT(*) AS n FROM sightings WHERE day = ? AND source = ? AND passes >= ? AND passes <= ?')
       .get(day, source, minPasses, maxPasses) as { n: number };
     return Number(row.n);
+  }
+
+  getState<T>(key: string): T | undefined {
+    const row = this.db.prepare('SELECT value FROM state WHERE key = ?').get(key) as { value: string } | undefined;
+    try {
+      return row ? (JSON.parse(row.value) as T) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  setState(key: string, value: unknown) {
+    this.db.prepare('INSERT INTO state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, JSON.stringify(value));
+  }
+
+  /** Merges one sweep (bin → dB) into its hour, keeping the strongest reading per bin. */
+  addSpectrum(hour: number, bins: Map<number, number>) {
+    const up = this.db.prepare('INSERT INTO spectrum (hour, bin, db) VALUES (?, ?, ?) ON CONFLICT(hour, bin) DO UPDATE SET db = MAX(db, excluded.db)');
+    this.db.exec('BEGIN');
+    try {
+      for (const [bin, db] of bins) up.run(hour, bin, db);
+      this.db.exec('COMMIT');
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
+  }
+
+  /** Spectrum rows for hours >= fromHour, as dense arrays of `bins` values. */
+  spectrumSince(fromHour: number, bins: number): { hour: number; db: (number | null)[] }[] {
+    const rows = this.db.prepare('SELECT hour, bin, db FROM spectrum WHERE hour >= ? ORDER BY hour').all(fromHour) as { hour: number; bin: number; db: number }[];
+    const byHour = new Map<number, (number | null)[]>();
+    for (const r of rows) {
+      const arr = byHour.get(r.hour) ?? new Array<number | null>(bins).fill(null);
+      arr[r.bin] = r.db;
+      byHour.set(r.hour, arr);
+    }
+    return [...byHour].map(([hour, db]) => ({ hour, db }));
+  }
+
+  /** Deletes everything older than the retention window. Returns rows removed per table. */
+  purge(beforeTs: number, beforeDay: string): Record<string, number> {
+    const n = (sql: string, ...args: (string | number)[]) => Number(this.db.prepare(sql).run(...args).changes);
+    return {
+      feed: n('DELETE FROM feed WHERE ts < ?', beforeTs),
+      sightings: n('DELETE FROM sightings WHERE day < ?', beforeDay),
+      aircraft: n('DELETE FROM aircraft_day WHERE day < ?', beforeDay),
+      spectrum: n('DELETE FROM spectrum WHERE hour < ?', Math.floor(beforeTs / 3600_000)),
+    };
   }
 
   aircraftCount(day: string): number {

@@ -18,11 +18,11 @@ export const FAMILY_LABEL: Record<Family, string> = {
 
 /** Bands drawn on the dial. sourceIds link a band to the decoders that use it. */
 export const BANDS: { name: string; lo: number; hi: number; family: Family; sourceIds: string[] }[] = [
-  { name: 'FM', lo: 88, hi: 108, family: 'bcast', sourceIds: [] },
+  { name: 'FM', lo: 88, hi: 108, family: 'bcast', sourceIds: ['hdradio'] },
   { name: 'Air', lo: 118, hi: 137, family: 'air', sourceIds: ['atc', 'vdl2'] },
   { name: 'NOAA·AIS', lo: 161.9, hi: 162.6, family: 'wx', sourceIds: ['noaa', 'ais'] },
   { name: 'TPMS', lo: 314.5, hi: 315.5, family: 'home', sourceIds: ['ism'] },
-  { name: 'Sondes', lo: 400, hi: 406, family: 'wx', sourceIds: [] },
+  { name: 'Sondes', lo: 400, hi: 406, family: 'wx', sourceIds: ['sonde'] },
   { name: '433', lo: 433.4, hi: 434.4, family: 'home', sourceIds: ['ism'] },
   { name: 'Meters', lo: 911, hi: 919, family: 'home', sourceIds: ['ism'] },
   { name: 'UAT', lo: 977, hi: 979, family: 'air', sourceIds: ['uat'] },

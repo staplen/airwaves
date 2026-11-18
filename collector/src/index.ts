@@ -1,13 +1,16 @@
 import { createServer, type ServerResponse } from 'node:http';
 import { createSocket } from 'node:dgram';
 import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs';
-import { extname, join, normalize } from 'node:path';
+import { dirname, extname, join, normalize } from 'node:path';
 import { connect as mqttConnect } from 'mqtt';
-import type { Aircraft, AisFixed, FeedItem, SchedulerState, Snapshot, SourceStatus, Vessel } from '../../shared/types.ts';
+import type { Aircraft, AisFixed, Balloon, FeedItem, SchedulerState, Snapshot, SourceStatus, SpectrumHeat, Vessel } from '../../shared/types.ts';
 import { AdsbSource } from './adsb.ts';
 import { AisDecoder, shipTypeName } from './ais.ts';
 import { ClipWatcher, type Clip } from './clips.ts';
 import { parseSame } from './eas.ts';
+import { ingestSpectrum, purgeOldFiles, SPECTRUM_BINS } from './housekeeping.ts';
+import { ingestHdRadio } from './hdradio.ts';
+import { SondeTracker } from './sonde.ts';
 import { describeSensor, parseRtl433 } from './rtl433.ts';
 import { Store, localDay } from './store.ts';
 import { parseVdl2 } from './vdl2.ts';
@@ -22,13 +25,25 @@ const MQTT_URL = env.MQTT_URL; // e.g. mqtt://127.0.0.1:1883; ingest is off with
 const AIS_UDP_PORT = Number(env.AIS_UDP_PORT ?? 4100);
 const VDL2_UDP_PORT = Number(env.VDL2_UDP_PORT ?? 4101);
 const CLIPS_ROOT = env.CLIPS_ROOT; // folder holding atc/ and noaa/ clip folders
+// rtl_power sweeps land here; default is a "spectrum" folder next to DATA_DIR (/airwaves/spectrum on the Pi).
+const SPECTRUM_DIR = env.SPECTRUM_DIR ?? join(dirname(env.DATA_DIR ?? 'data'), 'spectrum');
+const HD_DIR = env.HD_DIR ?? join(dirname(env.DATA_DIR ?? 'data'), 'hdradio'); // nrsc5 logs + album art
+const ART_DIR = join(HD_DIR, 'art');
+const SONDE_UDP_PORT = Number(env.SONDE_UDP_PORT ?? 55673);
+const CLIP_RETENTION_MS = 24 * 3600_000; // audio files and album art
+const DB_RETENTION_DAYS = 7; // feed, daily sightings, spectrum
 const WEB_DIR = env.WEB_DIR; // built dashboard (web/dist) to serve, if set
 const GAS_METER_ID = env.GAS_METER_ID; // your own meter's ERT id, to call it out in the feed
 const SUMMARY_EVERY_MS = 5 * 60_000;
 
 mkdirSync(DATA_DIR, { recursive: true });
 const store = new Store(`${DATA_DIR}/airwaves.db`);
-const adsb = new AdsbSource(ADSB_URL);
+// The readsb slot writes JSON here; Ultrafeeder's HTTP endpoint is the fallback.
+const READSB_DIR = env.READSB_DIR ?? join(dirname(env.DATA_DIR ?? 'data'), 'readsb');
+const adsb = new AdsbSource(ADSB_URL, READSB_DIR);
+// The site is shown without the home location when reached through a public tunnel
+// (Cloudflare adds cf-* headers) or when PUBLIC=1.
+const FORCE_PUBLIC = env.PUBLIC === '1';
 
 // Slot ids match the scheduler's slots.json.
 const SOURCES: Omit<SourceStatus, 'lastHeard' | 'running'>[] = [
@@ -38,6 +53,8 @@ const SOURCES: Omit<SourceStatus, 'lastHeard' | 'running'>[] = [
   { id: 'vdl2', name: 'Datalink', family: 'air', freqMhz: 136.8 },
   { id: 'ism', name: 'Sensors', family: 'home', freqMhz: 315 },
   { id: 'noaa', name: 'NOAA', family: 'wx', freqMhz: 162.45 },
+  { id: 'sonde', name: 'Balloons', family: 'wx', freqMhz: 403 },
+  { id: 'hdradio', name: 'HD Radio', family: 'bcast', freqMhz: 98 },
   { id: 'spectrum', name: 'Spectrum', family: 'bcast', freqMhz: 500 },
   { id: 'uat', name: 'UAT', family: 'air', freqMhz: 978, note: 'Needs the attic 1090/978 antenna' },
 ];
@@ -53,12 +70,14 @@ const startedAt = Date.now();
 const lastHeard = new Map<string, number>();
 const vessels = new Map<number, Vessel>();
 const aisFixed = new Map<number, AisFixed>();
+const sondes = new SondeTracker();
 let scheduler: SchedulerState | undefined;
 let lastSummary = 0;
 let tpmsNewSinceSummary = 0;
 const lastVdl2PerFlight = new Map<string, number>();
 const lastSensorPost = new Map<string, number>();
-const clients = new Set<ServerResponse>();
+const lastAircraftSave = new Map<string, number>();
+const clients = new Map<ServerResponse, boolean>(); // response → is public viewer
 
 const rotating = () => scheduler !== undefined && Date.now() - scheduler.updatedAt < 15 * 60_000;
 
@@ -92,11 +111,15 @@ function snapshot(): Snapshot {
       ...s,
       running: s.id === 'adsb' || planned.has(s.id),
       lastHeard: s.id === 'adsb' ? adsb.lastHeard : lastHeard.get(s.id),
-      error: s.id === 'adsb' && adsb.lastError && adsbExpected ? `Receiver unreachable (${adsb.lastError})` : undefined,
+      error:
+        s.id === 'adsb' && adsb.lastError && adsbExpected
+          ? `Receiver unreachable (${adsb.lastError})`
+          : slotFailure(s.id, now),
     })),
     aircraft,
     vessels: [...vessels.values()].filter((v) => now - v.lastSeen < 3 * 3600_000),
     aisFixed: [...aisFixed.values()],
+    balloons: sondes.recent(now),
     totals: {
       aircraftToday: store.aircraftCount(day),
       atcClipsToday: store.countSightings(day, 'atc'),
@@ -113,12 +136,32 @@ function snapshot(): Snapshot {
   };
 }
 
+/** A slot failure reported by the scheduler within the last loop, as a short message. */
+function slotFailure(id: string, now: number): string | undefined {
+  const f = scheduler?.failures?.[id];
+  const loopMs = (scheduler?.loopMinutes ?? 19) * 60_000 * 1.2;
+  return f && now - f.at < loopMs ? `Slot failed: ${f.reason}` : undefined;
+}
+
+// ---- public view: no home location, no distances --------------------------------------------
+const DISTANCE_TEXT = /,?\s*(?:at\s+)?[\d.]+\s*nm\b/g;
+function publicSnapshot(s: Snapshot): Snapshot {
+  return { ...s, home: undefined, aircraft: s.aircraft.map((a) => ({ ...a, distNm: undefined })), stats: { ...s.stats, maxRangeNm: 0 } };
+}
+function publicItem(f: FeedItem): FeedItem {
+  return f.kind === 'Aircraft' ? { ...f, body: f.body.replace(DISTANCE_TEXT, '') } : f;
+}
+const isPublic = (req: { headers: Record<string, string | string[] | undefined> }) => FORCE_PUBLIC || Boolean(req.headers['cf-connecting-ip'] || req.headers['cf-ray']);
+
 function send(res: ServerResponse, event: string, data: unknown) {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
-function broadcast(event: string, data: unknown) {
-  for (const c of clients) send(c, event, data);
+function broadcast(event: 'snapshot' | 'feed', data: Snapshot | FeedItem) {
+  for (const [c, pub] of clients) {
+    if (!pub) send(c, event, data);
+    else send(c, event, event === 'snapshot' ? publicSnapshot(data as Snapshot) : publicItem(data as FeedItem));
+  }
 }
 
 function publishFeed(item: Omit<FeedItem, 'id'>) {
@@ -183,7 +226,12 @@ async function tick() {
   const now = Date.now();
   if (ok) {
     const day = localDay(now);
-    for (const a of adsb.aircraft) store.seeAircraft(day, a.hex, a.flight, a.type, now);
+    // Record each aircraft at most once a minute: a write per aircraft every 2 s wears the SD card.
+    for (const a of adsb.aircraft) {
+      if (now - (lastAircraftSave.get(a.hex) ?? 0) < 60_000) continue;
+      lastAircraftSave.set(a.hex, now);
+      store.seeAircraft(day, a.hex, a.flight, a.type, now);
+    }
   }
   maybeSummarizeAircraft(now);
   if (now - lastSummary >= SUMMARY_EVERY_MS) {
@@ -246,6 +294,21 @@ function onVdl2(raw: string) {
   if (!c.title.includes('controller') && c.ts - last < 5 * 60_000) return;
   lastVdl2PerFlight.set(key, c.ts);
   publishFeed({ ts: c.ts, family: 'air', kind: 'Datalink', title: c.title, meta: `${c.freqMhz.toFixed(3)}`, body: c.body, raw: c.raw });
+}
+
+// ---- weather balloons (radiosonde_auto_rx payload summaries over UDP) -----------------------
+const km = (m: number) => `${(m / 1000).toFixed(1)} km`;
+function onSonde(raw: string) {
+  const e = sondes.push(raw);
+  if (!e) return;
+  heard('sonde');
+  const b = e.balloon;
+  const freq = b.freqMhz ? b.freqMhz.toFixed(3) : '400–406';
+  if (e.kind === 'detected') {
+    publishFeed({ ts: Date.now(), family: 'wx', kind: 'Balloon', title: `Weather balloon ${b.id}`, meta: freq, body: `${b.model ?? 'Radiosonde'} picked up at ${km(b.altM)}${b.vertMps !== undefined ? `, ${b.vertMps > 0 ? 'climbing' : 'descending'} ${Math.abs(b.vertMps).toFixed(1)} m/s` : ''}.` });
+  } else if (e.kind === 'burst') {
+    publishFeed({ ts: Date.now(), family: 'wx', kind: 'Balloon', title: `Balloon ${b.id} burst`, meta: freq, body: `Reached ${km(b.maxAltM)} before bursting; now falling by parachute.` });
+  }
 }
 
 // ---- rtl_433 and NOAA alerts (MQTT) -------------------------------------------------------
@@ -322,6 +385,7 @@ function udp(port: number, onLine: (l: string) => void) {
   s.bind(port);
 }
 udp(AIS_UDP_PORT, onAisLine);
+udp(SONDE_UDP_PORT, onSonde);
 udp(VDL2_UDP_PORT, onVdl2);
 
 // ---- audio clips (ATC and weather radio) -----------------------------------------------------
@@ -331,21 +395,36 @@ function onClip(c: Clip) {
     heard('atc', c.ts);
     store.sight(localDay(c.ts), 'atc', c.file, c.ts);
     const ch = ATC_NAMES[c.template] ?? { name: c.template.replace(/_/g, ' '), freq: '' };
-    publishFeed({ ts: c.ts, family: 'air', kind: 'ATC', title: ch.name, meta: `${ch.freq}`, body: 'Transcript coming soon. Play the clip to listen.', clip: url });
+    publishFeed({ ts: c.ts, family: 'air', kind: 'ATC', title: ch.name, meta: `${ch.freq}`, body: '', clip: url });
   } else if (c.dir === 'noaa') {
     heard('noaa', c.ts);
-    publishFeed({ ts: c.ts, family: 'wx', kind: 'Weather', title: 'NOAA Weather Radio', meta: `162.450`, body: 'Latest 60-second clip of the broadcast.', clip: url });
+    publishFeed({ ts: c.ts, family: 'wx', kind: 'Weather', title: 'NOAA Weather Radio', meta: `162.450`, body: '', clip: url });
   }
 }
 if (CLIPS_ROOT) new ClipWatcher({ atc: join(CLIPS_ROOT, 'atc'), noaa: join(CLIPS_ROOT, 'noaa') }, onClip).start();
 
 // ---- HTTP -------------------------------------------------------------------------------------
-const TYPES: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.json': 'application/json' };
+const TYPES: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.json': 'application/json' };
 
-function serveFile(res: ServerResponse, root: string, rel: string): boolean {
+/** Serves a file under `root`, with Content-Length and byte ranges so audio shows a duration and can seek. */
+function serveFile(res: ServerResponse, root: string, rel: string, range?: string): boolean {
   const path = normalize(join(root, rel));
   if (!path.startsWith(normalize(root)) || !existsSync(path) || !statSync(path).isFile()) return false;
-  res.writeHead(200, { 'content-type': TYPES[extname(path)] ?? 'application/octet-stream' });
+  const size = statSync(path).size;
+  const type = TYPES[extname(path)] ?? 'application/octet-stream';
+  const m = range?.match(/^bytes=(\d*)-(\d*)$/);
+  if (m && (m[1] || m[2])) {
+    const start = m[1] ? Number(m[1]) : Math.max(0, size - Number(m[2]));
+    const end = m[1] && m[2] ? Math.min(Number(m[2]), size - 1) : size - 1;
+    if (start > end || start >= size) {
+      res.writeHead(416, { 'content-range': `bytes */${size}` }).end();
+      return true;
+    }
+    res.writeHead(206, { 'content-type': type, 'content-length': end - start + 1, 'content-range': `bytes ${start}-${end}/${size}`, 'accept-ranges': 'bytes' });
+    createReadStream(path, { start, end }).pipe(res);
+    return true;
+  }
+  res.writeHead(200, { 'content-type': type, 'content-length': size, 'accept-ranges': 'bytes' });
   createReadStream(path).pipe(res);
   return true;
 }
@@ -355,13 +434,17 @@ const server = createServer((req, res) => {
   const p = decodeURIComponent(url.pathname);
   if (p === '/api/snapshot') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ snapshot: snapshot(), feed: store.recentFeed(80) }));
+    const pub = isPublic(req);
+    const snap = snapshot();
+    const feed = store.recentFeed(200);
+    res.end(JSON.stringify(pub ? { snapshot: publicSnapshot(snap), feed: feed.map(publicItem) } : { snapshot: snap, feed }));
     return;
   }
   if (p === '/api/stream') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
-    clients.add(res);
-    send(res, 'snapshot', snapshot());
+    const pub = isPublic(req);
+    clients.set(res, pub);
+    send(res, 'snapshot', pub ? publicSnapshot(snapshot()) : snapshot());
     req.on('close', () => clients.delete(res));
     return;
   }
@@ -370,14 +453,79 @@ const server = createServer((req, res) => {
     res.end(JSON.stringify({ ok: true, adsbError: adsb.lastError ?? null, mqtt: Boolean(MQTT_URL), rotating: rotating(), clients: clients.size }));
     return;
   }
+  if (p === '/api/spectrum') {
+    const heat: SpectrumHeat = { bins: SPECTRUM_BINS, rows: store.spectrumSince(Math.floor(Date.now() / 3600_000) - 23, SPECTRUM_BINS) };
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(heat));
+    return;
+  }
+  if (p.startsWith('/api/art/')) {
+    if (serveFile(res, ART_DIR, p.slice('/api/art/'.length))) return;
+  }
   if (p.startsWith('/api/clips/') && CLIPS_ROOT) {
-    if (serveFile(res, CLIPS_ROOT, p.slice('/api/clips/'.length))) return;
+    if (serveFile(res, CLIPS_ROOT, p.slice('/api/clips/'.length), req.headers.range)) return;
   }
   if (WEB_DIR && !p.startsWith('/api/')) {
     if (serveFile(res, WEB_DIR, p === '/' ? 'index.html' : p) || serveFile(res, WEB_DIR, 'index.html')) return;
   }
   res.writeHead(404).end();
 });
+
+// ---- housekeeping: bounded storage on the Pi ---------------------------------------------------
+async function housekeeping() {
+  const now = Date.now();
+  const files = CLIPS_ROOT
+    ? (await purgeOldFiles(join(CLIPS_ROOT, 'atc'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'noaa'), CLIP_RETENTION_MS, ['.mp3', '.wav']))
+    : 0;
+  const art = await purgeOldFiles(ART_DIR, CLIP_RETENTION_MS, ['.jpg', '.jpeg', '.png']);
+  const cutoff = now - DB_RETENTION_DAYS * 86_400_000;
+  const rows = store.purge(cutoff, localDay(cutoff));
+  const removedRows = Object.values(rows).reduce((a, b) => a + b, 0);
+  if (files || art || removedRows) console.log(`housekeeping: ${files} clips and ${art} images deleted, rows removed ${JSON.stringify(rows)}`);
+  // Small in-memory maps: drop entries older than a day.
+  for (const m of [lastVdl2PerFlight, lastSensorPost, lastAircraftSave]) for (const [k, t] of m) if (now - t > 86_400_000) m.delete(k);
+  for (const [k, v] of vessels) if (now - v.lastSeen > 86_400_000) vessels.delete(k);
+}
+// Results that land as files (spectrum sweeps, HD Radio logs) are picked up every minute.
+async function ingestFiles() {
+  const now = Date.now();
+  if (await ingestSpectrum(SPECTRUM_DIR, store)) heard('spectrum', now);
+  mkdirSync(ART_DIR, { recursive: true });
+  for (const c of await ingestHdRadio(HD_DIR, ART_DIR)) {
+    heard('hdradio', c.ts);
+    const name = c.station ?? `${c.freq} FM`;
+    const playing = c.title ? `${c.title}${c.artist ? ` — ${c.artist}` : ''}` : c.slogan ?? 'No song information';
+    publishFeed({ ts: c.ts, family: 'bcast', kind: 'Radio', title: `${name} HD${c.program + 1}`, meta: c.freq, body: playing, image: c.image ? `/api/art/${encodeURIComponent(c.image)}` : undefined });
+  }
+}
+setInterval(() => void ingestFiles(), 60_000);
+
+// ---- state that survives restarts: ships, buoys, home location ------------------------------------
+function saveState() {
+  store.setState('vessels', [...vessels.values()]);
+  store.setState('aisFixed', [...aisFixed.values()]);
+  if (adsb.home) store.setState('home', adsb.home);
+  store.setState('balloons', [...sondes.flights.values()]);
+}
+function loadState() {
+  const day = Date.now() - 86_400_000;
+  for (const v of store.getState<Vessel[]>('vessels') ?? []) if (v.lastSeen > day) vessels.set(v.mmsi, v);
+  for (const f of store.getState<AisFixed[]>('aisFixed') ?? []) aisFixed.set(f.mmsi, f);
+  adsb.home ??= store.getState('home');
+  for (const b of store.getState<Balloon[]>('balloons') ?? []) if (b.lastSeen > day) sondes.flights.set(b.id, b);
+}
+loadState();
+for (const sig of ['SIGTERM', 'SIGINT'] as const)
+  process.on(sig, () => {
+    saveState();
+    process.exit(0);
+  });
+
+void housekeeping();
+setInterval(() => {
+  saveState();
+  void housekeeping();
+}, 10 * 60_000);
 
 await adsb.loadReceiver().catch((e) => console.warn('receiver.json unavailable:', e.message));
 await tick();
