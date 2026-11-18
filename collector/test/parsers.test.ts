@@ -6,6 +6,7 @@ import { flightName, translateAcars } from '../src/acars.ts';
 import { parseRtl433 } from '../src/rtl433.ts';
 import { parseSame } from '../src/eas.ts';
 import { SondeTracker } from '../src/sonde.ts';
+import { parseHdLog } from '../src/hdradio.ts';
 
 const near = (a: number | undefined, b: number, eps = 0.01) => assert.ok(a !== undefined && Math.abs(a - b) < eps, `${a} not within ${eps} of ${b}`);
 
@@ -94,4 +95,15 @@ test('radiosonde tracker: detected then burst', () => {
   assert.equal(e?.kind, 'burst');
   assert.equal(e?.balloon.maxAltM, 20000);
   assert.equal(t.push(pkt(17000, -15))?.kind, 'update'); // burst reported once
+});
+
+test('HD Radio log keeps the station and the last song', () => {
+  const r = parseHdLog(
+    ['12:00:01 Station name: WTOP-FM', '12:00:02 Slogan: News', '12:00:05 Title: Song A', '12:00:05 Artist: Band A', '12:01:00 Title: Song B', '12:01:00 Artist: Band B', '12:01:01 Audio bit rate: 40 kbps'].join('\n'),
+  );
+  assert.equal(r.station, 'WTOP-FM');
+  assert.equal(r.slogan, 'News');
+  assert.equal(r.title, 'Song B');
+  assert.equal(r.artist, 'Band B');
+  assert.equal(r.album, undefined);
 });

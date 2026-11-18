@@ -74,10 +74,10 @@
       ]
     },
     {
-      "id": "hdradio", "name": "HD Radio", "freqMhz": 98, "minutes": 2, "everyLoops": 3, "runsOnce": true,
+      "id": "hdradio", "name": "HD Radio", "freqMhz": 98, "minutes": 4, "runsOnce": true,
       "image": "airwaves-hdradio:local",
       "binds": ["/mnt/data/supervisor/share/airwaves/hdradio:/out"],
-      "env": ["HD_STATIONS=${HD_STATIONS}"]
+      "env": ["HD_STATIONS=${HD_STATIONS}", "HD_SNIPPET_SEC=12", "HD_DWELL_SEC=60"]
     },
     {
       "id": "spectrum", "name": "Spectrum", "freqMhz": 500, "minutes": 1,

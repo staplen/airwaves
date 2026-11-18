@@ -3,7 +3,7 @@ import { createSocket } from 'node:dgram';
 import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, extname, join, normalize } from 'node:path';
 import { connect as mqttConnect } from 'mqtt';
-import type { Aircraft, AisFixed, Balloon, FeedItem, SchedulerState, Snapshot, SourceStatus, SpectrumHeat, Vessel } from '../../shared/types.ts';
+import type { Aircraft, AisFixed, Balloon, FeedItem, RadioStation, SchedulerState, Snapshot, SourceStatus, SpectrumHeat, Vessel } from '../../shared/types.ts';
 import { AdsbSource } from './adsb.ts';
 import { AisDecoder, shipTypeName } from './ais.ts';
 import { ClipWatcher, type Clip } from './clips.ts';
@@ -24,7 +24,7 @@ const DATA_DIR = env.DATA_DIR ?? 'data';
 const MQTT_URL = env.MQTT_URL; // e.g. mqtt://127.0.0.1:1883; ingest is off without it
 const AIS_UDP_PORT = Number(env.AIS_UDP_PORT ?? 4100);
 const VDL2_UDP_PORT = Number(env.VDL2_UDP_PORT ?? 4101);
-const CLIPS_ROOT = env.CLIPS_ROOT; // folder holding atc/ and noaa/ clip folders
+const CLIPS_ROOT = env.CLIPS_ROOT; // folder holding atc/, noaa/ and radio/ clip folders
 // rtl_power sweeps land here; default is a "spectrum" folder next to DATA_DIR (/airwaves/spectrum on the Pi).
 const SPECTRUM_DIR = env.SPECTRUM_DIR ?? join(dirname(env.DATA_DIR ?? 'data'), 'spectrum');
 const HD_DIR = env.HD_DIR ?? join(dirname(env.DATA_DIR ?? 'data'), 'hdradio'); // nrsc5 logs + album art
@@ -81,6 +81,8 @@ const clients = new Map<ServerResponse, boolean>(); // response → is public vi
 
 const rotating = () => scheduler !== undefined && Date.now() - scheduler.updatedAt < 15 * 60_000;
 
+const radio = new Map<string, RadioStation>(); // HD Radio stations by "<freq>_<program>"
+
 function heard(source: string, ts = Date.now()) {
   lastHeard.set(source, Math.max(lastHeard.get(source) ?? 0, ts));
 }
@@ -120,6 +122,7 @@ function snapshot(): Snapshot {
     vessels: [...vessels.values()].filter((v) => now - v.lastSeen < 3 * 3600_000),
     aisFixed: [...aisFixed.values()],
     balloons: sondes.recent(now),
+    radio: [...radio.values()].sort((a, b) => Number(a.freq) - Number(b.freq) || a.program - b.program),
     totals: {
       aircraftToday: store.aircraftCount(day),
       atcClipsToday: store.countSightings(day, 'atc'),
@@ -475,7 +478,7 @@ const server = createServer((req, res) => {
 async function housekeeping() {
   const now = Date.now();
   const files = CLIPS_ROOT
-    ? (await purgeOldFiles(join(CLIPS_ROOT, 'atc'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'noaa'), CLIP_RETENTION_MS, ['.mp3', '.wav']))
+    ? (await purgeOldFiles(join(CLIPS_ROOT, 'atc'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'noaa'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'radio'), CLIP_RETENTION_MS, ['.mp3', '.wav']))
     : 0;
   const art = await purgeOldFiles(ART_DIR, CLIP_RETENTION_MS, ['.jpg', '.jpeg', '.png']);
   const cutoff = now - DB_RETENTION_DAYS * 86_400_000;
@@ -491,11 +494,34 @@ async function ingestFiles() {
   const now = Date.now();
   if (await ingestSpectrum(SPECTRUM_DIR, store)) heard('spectrum', now);
   mkdirSync(ART_DIR, { recursive: true });
-  for (const c of await ingestHdRadio(HD_DIR, ART_DIR)) {
+  const radioClips = CLIPS_ROOT ? join(CLIPS_ROOT, 'radio') : undefined;
+  for (const c of await ingestHdRadio(HD_DIR, ART_DIR, radioClips)) {
     heard('hdradio', c.ts);
-    const name = c.station ?? `${c.freq} FM`;
-    const playing = c.title ? `${c.title}${c.artist ? ` — ${c.artist}` : ''}` : c.slogan ?? 'No song information';
-    publishFeed({ ts: c.ts, family: 'bcast', kind: 'Radio', title: `${name} HD${c.program + 1}`, meta: c.freq, body: playing, image: c.image ? `/api/art/${encodeURIComponent(c.image)}` : undefined });
+    const key = `${c.freq}_${c.program}`;
+    const prev = radio.get(key);
+    const art = c.image ? `/api/art/${encodeURIComponent(c.image)}` : undefined;
+    const clip = c.clip ? `/api/clips/radio/${encodeURIComponent(c.clip)}` : undefined;
+    const titleChanged = c.title !== undefined && c.title !== prev?.title;
+    const st: RadioStation = {
+      key,
+      freq: c.freq,
+      program: c.program,
+      name: c.station ?? prev?.name,
+      slogan: c.slogan ?? prev?.slogan,
+      title: c.title ?? prev?.title,
+      artist: c.title !== undefined ? c.artist : prev?.artist,
+      album: c.title !== undefined ? c.album : prev?.album,
+      art: art ?? (titleChanged ? undefined : prev?.art),
+      clip: clip ?? prev?.clip,
+      updatedAt: c.ts,
+      songAt: titleChanged ? c.ts : prev?.songAt,
+    };
+    radio.set(key, st);
+    // Post to the feed on a song change, or the first time we see a station today.
+    if (titleChanged || !prev || localDay(prev.updatedAt) !== localDay(c.ts)) {
+      const playing = c.title ? `${c.title}${c.artist ? ` — ${c.artist}` : ''}` : c.slogan ?? 'No song information';
+      publishFeed({ ts: c.ts, family: 'bcast', kind: 'Radio', title: `${st.name ?? `${c.freq} FM`} HD${c.program + 1}`, meta: c.freq, body: playing, image: art, clip });
+    }
   }
 }
 setInterval(() => void ingestFiles(), 60_000);
@@ -506,12 +532,14 @@ function saveState() {
   store.setState('aisFixed', [...aisFixed.values()]);
   if (adsb.home) store.setState('home', adsb.home);
   store.setState('balloons', [...sondes.flights.values()]);
+  store.setState('radio', [...radio.values()]);
 }
 function loadState() {
   const day = Date.now() - 86_400_000;
   for (const v of store.getState<Vessel[]>('vessels') ?? []) if (v.lastSeen > day) vessels.set(v.mmsi, v);
   for (const f of store.getState<AisFixed[]>('aisFixed') ?? []) aisFixed.set(f.mmsi, f);
   adsb.home ??= store.getState('home');
+  for (const r of store.getState<RadioStation[]>('radio') ?? []) if (r.updatedAt > day) radio.set(r.key, r);
   for (const b of store.getState<Balloon[]>('balloons') ?? []) if (b.lastSeen > day) sondes.flights.set(b.id, b);
 }
 loadState();

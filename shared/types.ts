@@ -103,6 +103,22 @@ export interface FeedItem {
   image?: string; // e.g. HD Radio album art URL
 }
 
+/** An HD Radio station seen by the sweep, with what it was last playing. */
+export interface RadioStation {
+  key: string; // "<freq>_<program>"
+  freq: string;
+  program: number; // 0 = HD1
+  name?: string;
+  slogan?: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  art?: string; // album art URL
+  clip?: string; // audio snippet URL
+  updatedAt: number;
+  songAt?: number; // when the current title was first seen
+}
+
 export interface Totals {
   aircraftToday: number;
   atcClipsToday: number;
@@ -122,6 +138,7 @@ export interface Snapshot {
   vessels: Vessel[];
   aisFixed: AisFixed[];
   balloons: Balloon[];
+  radio: RadioStation[];
   totals: Totals;
   stats: { maxRangeNm: number; avgRssi?: number };
 }
