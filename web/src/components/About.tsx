@@ -33,7 +33,7 @@ export function About() {
             <li><b>Live traffic and weather radar</b> map overlays, broadcast as data alongside HD Radio stations.</li>
           </ul>
           <p>
-            One dongle can only listen to one slice of the spectrum at a time, so a scheduler rotates through decoders on a loop of about 20 minutes. The strip at
+            One dongle can only listen to one slice of the spectrum at a time, so a scheduler rotates through decoders on a repeating loop of several minutes. The strip at
             the top shows what's tuned now and what's next, and each tile shows when its source was last heard.
           </p>
           <p className="muted">Audio is kept for 24 hours and everything else for 7 days. Only counts are shown for cars and meters, never their IDs.</p>

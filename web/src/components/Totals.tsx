@@ -11,12 +11,15 @@ interface Tile {
   heard?: number; // overrides the source's last-heard time (pinned sensors)
 }
 
-// The ring empties over one rotation loop (about 19 minutes): full = just heard, empty = a loop or more ago.
-const LOOP_MS = 19 * 60_000;
+// The ring empties over one rotation loop: full = just heard, empty = a loop or more ago.
+// The loop length comes from the scheduler; 19 minutes is only a fallback before it reports.
+const FALLBACK_LOOP_MS = 19 * 60_000;
 
 export function Totals({ snapshot }: { snapshot?: Snapshot }) {
   const t = snapshot?.totals;
   const now = snapshot?.now ?? Date.now();
+  const loopMin = snapshot?.rotation.loop?.reduce((a, x) => a + x.minutes, 0);
+  const LOOP_MS = loopMin ? loopMin * 60_000 : FALLBACK_LOOP_MS;
   const source = (id: string) => snapshot?.sources.find((s) => s.id === id);
   const tiles: Tile[] = [
     { value: t?.aircraftToday, label: 'aircraft today', color: 'var(--air)', sourceId: 'adsb' },
