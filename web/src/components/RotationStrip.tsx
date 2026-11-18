@@ -1,4 +1,4 @@
-import { dur } from '../live.ts';
+import { dur, slotName } from '../live.ts';
 import type { Snapshot } from '../../../shared/types.ts';
 import { FAMILY_COLOR } from '../bands.ts';
 
@@ -18,6 +18,7 @@ export function RotationStrip({ snapshot, expanded, onToggle }: { snapshot?: Sna
   const src = (id?: string) => snapshot?.sources.find((s) => s.id === id);
   const curSrc = src(cur?.sourceId);
   const curColor = curSrc ? FAMILY_COLOR[curSrc.family] : 'var(--muted)';
+  const curName = curSrc?.name ?? (cur ? slotName(cur.sourceId) : undefined);
 
   // Current slot first (with progress), then what's next.
   const curMin = cur?.endsAt ? Math.max(0.5, (cur.endsAt - cur.since) / 60_000) : 3;
@@ -33,13 +34,13 @@ export function RotationStrip({ snapshot, expanded, onToggle }: { snapshot?: Sna
 
   return (
     <div className="strip">
-      <div className="strip-now" title={curSrc ? `Tuned to ${curSrc.name}` : 'Waiting for the receiver'}>
+      <div className="strip-now" title={curName ? `Tuned to ${curName}` : 'Waiting for the receiver'}>
         <span className="strip-freq">{cur ? cur.freqMhz.toFixed(3) : '—'}</span>
         <span className="strip-unit">MHz</span>
-        {curSrc && (
+        {curName && (
           <span className="strip-chip" style={{ color: curColor }}>
             <span className="dot" style={{ background: 'var(--live)' }} />
-            <span className="strip-name">{curSrc.name}</span>
+            <span className="strip-name">{curName}</span>
             {switching ? (
               <span className="switching" role="status">
                 switching<span className="dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>
@@ -56,24 +57,24 @@ export function RotationStrip({ snapshot, expanded, onToggle }: { snapshot?: Sna
           loop.map((s, i) => {
             const so = src(s.sourceId);
             const color = so ? FAMILY_COLOR[so.family] : 'var(--muted)';
-            const title = `${so?.name ?? s.sourceId} · ${dur(s.minutes)}`;
+            const title = `${so?.name ?? slotName(s.sourceId)} · ${dur(s.minutes)}`;
             if (i === runIdx) {
               return (
                 <div key={i} className={switching ? 'seg seg-now seg-switching' : 'seg seg-now'} style={{ flexGrow: s.minutes, borderColor: curColor }} title={title}>
                   <div className="seg-fill" style={{ width: `${progress * 100}%`, background: curColor }} />
-                  <span className="seg-label" style={{ color: curColor, position: 'relative' }}>{so?.name ?? s.sourceId}</span>
+                  <span className="seg-label" style={{ color: curColor, position: 'relative' }}>{so?.name ?? slotName(s.sourceId)}</span>
                 </div>
               );
             }
             const nextUp = switching && i === (runIdx + 1) % loop.length;
             return (
               <div key={i} className={nextUp ? 'seg seg-next' : 'seg'} style={{ flexGrow: s.minutes, background: `${color}33`, color, opacity: i < runIdx ? 0.55 : 1 }} title={title}>
-                <span className="seg-label">{so?.name ?? s.sourceId}</span>
+                <span className="seg-label">{so?.name ?? slotName(s.sourceId)}</span>
               </div>
             );
           })
         ) : (
-          <div className="seg seg-now" style={{ flexGrow: curMin, borderColor: curColor }} title={curSrc?.name}>
+          <div className="seg seg-now" style={{ flexGrow: curMin, borderColor: curColor }} title={curName}>
             <div className="seg-fill" style={{ width: `${progress * 100}%`, background: curColor }} />
           </div>
         )}
@@ -81,8 +82,8 @@ export function RotationStrip({ snapshot, expanded, onToggle }: { snapshot?: Sna
           const so = src(s.id);
           const color = so ? FAMILY_COLOR[so.family] : 'var(--muted)';
           return (
-            <div key={i} className="seg" style={{ flexGrow: s.minutes, background: `${color}33`, color }} title={`${so?.name ?? s.id} · ${dur(s.minutes)}`}>
-              <span className="seg-label">{so?.name ?? s.id}</span>
+            <div key={i} className="seg" style={{ flexGrow: s.minutes, background: `${color}33`, color }} title={`${so?.name ?? slotName(s.id)} · ${dur(s.minutes)}`}>
+              <span className="seg-label">{so?.name ?? slotName(s.id)}</span>
             </div>
           );
         })}

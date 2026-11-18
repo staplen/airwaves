@@ -87,3 +87,6 @@ export function ago(ts: number | undefined, now: number): string {
 export function dur(minutes: number): string {
   return minutes < 1 ? `${Math.round(minutes * 60)} s` : `${minutes} min`;
 }
+
+/** Display name for a slot whose source the collector doesn't list (e.g. "trains" → "Trains"). */
+export const slotName = (id: string) => id.charAt(0).toUpperCase() + id.slice(1);

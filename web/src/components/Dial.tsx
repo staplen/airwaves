@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Snapshot, SpectrumHeat } from '../../../shared/types.ts';
 import { apiUrl } from '../api.ts';
-import { dur } from '../live.ts';
+import { dur, slotName } from '../live.ts';
 import { BANDS, FAMILY_COLOR, REF_BANDS, bandAt, dialFreq, dialX } from '../bands.ts';
 
 const TICKS = [100, 200, 300, 500, 700, 1000];
@@ -70,6 +70,7 @@ function Heatmap({ heat, onHover }: { heat?: SpectrumHeat; onHover: (text?: stri
 export function Dial({ snapshot }: { snapshot?: Snapshot }) {
   const current = snapshot?.rotation.current;
   const source = snapshot?.sources.find((s) => s.id === current?.sourceId);
+  const sourceName = source?.name ?? (current ? slotName(current.sourceId) : undefined);
   const running = new Set(snapshot?.sources.filter((s) => s.running).map((s) => s.id));
   const heat = useSpectrum();
   const [hover, setHover] = useState<string>();
@@ -81,10 +82,10 @@ export function Dial({ snapshot }: { snapshot?: Snapshot }) {
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 12 }}>
           <span className="freq">{current ? current.freqMhz.toFixed(3) : '—'}</span>
           <span className="muted">MHz</span>
-          {source && (
+          {sourceName && (
             <span className="chip">
               <span className="dot" style={{ background: 'var(--live)' }} />
-              {source.name}
+              {sourceName}
               {continuous ? ' · continuous' : current?.endsAt ? (snapshot!.now >= current.endsAt ? ' · switching…' : ` · ${remaining(current.endsAt, snapshot!.now)} left`) : ''}
             </span>
           )}
@@ -101,7 +102,7 @@ export function Dial({ snapshot }: { snapshot?: Snapshot }) {
                 const s = snapshot.sources.find((x) => x.id === n.sourceId);
                 return (
                   <span key={i} className="chip" style={{ color: s ? FAMILY_COLOR[s.family] : undefined }}>
-                    {s?.name ?? n.sourceId} {dur(n.minutes)}
+                    {s?.name ?? slotName(n.sourceId)} {dur(n.minutes)}
                   </span>
                 );
               })}
