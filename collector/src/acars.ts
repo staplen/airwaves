@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 // Turns common ACARS / VDL2 message formats into plain English.
 // Anything we don't recognise and that looks like machine telemetry is dropped;
 // recognisable free text is passed through as-is.
@@ -44,10 +45,15 @@ const AIRCRAFT: Record<string, string> = {
   B763: 'Boeing 767', B77W: 'Boeing 777', B789: 'Boeing 787-9', B788: 'Boeing 787-8', BCS3: 'Airbus A220-300',
 };
 
+// City names for ICAO codes (US airports with K codes, plus larger airports worldwide), from the
+// public-domain OurAirports data, bundled so nothing is looked up online.
+const CITY: Record<string, string> = JSON.parse(readFileSync(new URL('./airports.json', import.meta.url), 'utf8'));
+
+/** "KJNX" → "Smithfield, NC (KJNX)"; well-known airports use their short name ("Boston (KBOS)"). */
 export function airport(code?: string): string | undefined {
   if (!code) return undefined;
   const c = code.trim().toUpperCase();
-  const name = AIRPORTS[c] ?? IATA[c];
+  const name = AIRPORTS[c] ?? IATA[c] ?? CITY[c] ?? (c.length === 3 ? CITY[`K${c}`] : undefined);
   return name ? `${name} (${c})` : c;
 }
 

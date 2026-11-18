@@ -1,3 +1,4 @@
+import { dur } from '../live.ts';
 import type { Snapshot } from '../../../shared/types.ts';
 import { FAMILY_COLOR } from '../bands.ts';
 
@@ -55,7 +56,7 @@ export function RotationStrip({ snapshot, expanded, onToggle }: { snapshot?: Sna
           loop.map((s, i) => {
             const so = src(s.sourceId);
             const color = so ? FAMILY_COLOR[so.family] : 'var(--muted)';
-            const title = `${so?.name ?? s.sourceId} · ${s.minutes} min`;
+            const title = `${so?.name ?? s.sourceId} · ${dur(s.minutes)}`;
             if (i === runIdx) {
               return (
                 <div key={i} className={switching ? 'seg seg-now seg-switching' : 'seg seg-now'} style={{ flexGrow: s.minutes, borderColor: curColor }} title={title}>
@@ -80,7 +81,7 @@ export function RotationStrip({ snapshot, expanded, onToggle }: { snapshot?: Sna
           const so = src(s.id);
           const color = so ? FAMILY_COLOR[so.family] : 'var(--muted)';
           return (
-            <div key={i} className="seg" style={{ flexGrow: s.minutes, background: `${color}33`, color }} title={`${so?.name ?? s.id} · ${s.minutes} min`}>
+            <div key={i} className="seg" style={{ flexGrow: s.minutes, background: `${color}33`, color }} title={`${so?.name ?? s.id} · ${dur(s.minutes)}`}>
               <span className="seg-label">{so?.name ?? s.id}</span>
             </div>
           );

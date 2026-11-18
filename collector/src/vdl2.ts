@@ -98,7 +98,8 @@ export function parseVdl2(raw: string): Vdl2Catch | undefined {
     const loc = obj(param(xid, 'ac_location') ?? findKey(xid, 'ac_location'));
     const lat = typeof obj(loc?.loc)?.lat === 'number' ? (obj(loc?.loc)!.lat as number) : undefined;
     const lon = typeof obj(loc?.loc)?.lon === 'number' ? (obj(loc?.loc)!.lon as number) : undefined;
-    const altFt = typeof loc?.alt === 'number' ? (loc.alt as number) : undefined;
+    // Garbled reports sometimes carry impossible altitudes (e.g. 192,000 ft); drop those.
+    const altFt = typeof loc?.alt === 'number' && loc.alt > 0 && loc.alt <= 60_000 ? (loc.alt as number) : undefined;
     if (!dest && lat === undefined) return undefined;
     const body = [dest ? `Bound for ${airport(dest)}` : 'Connected to a new ground station', altFt ? `at ${altFt.toLocaleString('en-US')} ft` : undefined].filter(Boolean).join(' ') + '.';
     return { ts, freqMhz, flight, reg, title: `${who} · checked in`, body, lat, lon, altFt };

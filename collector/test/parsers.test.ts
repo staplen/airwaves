@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AisDecoder } from '../src/ais.ts';
 import { parseVdl2 } from '../src/vdl2.ts';
-import { flightName, translateAcars } from '../src/acars.ts';
+import { airport, flightName, translateAcars } from '../src/acars.ts';
 import { parseRtl433 } from '../src/rtl433.ts';
 import { parseSame } from '../src/eas.ts';
 import { SondeTracker } from '../src/sonde.ts';
@@ -195,4 +195,10 @@ test('HD Radio text: songs vs station messages', () => {
   assert.equal(classifyText('WAMU 88-5 American University Radio', 'WAMU 88.5', 'WAMU', 'HD1'), 'message');
   assert.equal(classifyText('BIG 100.3', undefined, 'BIG', 'HD1'), 'message');
   assert.equal(classifyText('Turn to 92.7 & 95.9', 'Looking For Praise? Tune in', 'WLNO', 'HD1'), 'message');
+});
+
+test('airport names: short names for majors, city + state from the bundled list', () => {
+  assert.equal(airport('KBOS'), 'Boston (KBOS)');
+  assert.equal(airport('KJNX'), 'Smithfield, NC (KJNX)');
+  assert.equal(airport('ZZZZ'), 'ZZZZ');
 });

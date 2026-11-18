@@ -3,7 +3,7 @@
   "standby": "ultrafeeder",
   "slots": [
     {
-      "id": "adsb", "name": "ADS-B", "freqMhz": 1090, "minutes": 3,
+      "id": "adsb", "name": "ADS-B", "freqMhz": 1090, "minutes": 0.5,
       "image": "ghcr.io/sdr-enthusiasts/docker-adsb-ultrafeeder:latest-build-845",
       "entrypoint": ["readsb"],
       "cmd": ["--device-type", "rtlsdr", "--device", "0", "--gain", "49.6",
@@ -12,7 +12,7 @@
       "binds": ["/mnt/data/supervisor/share/airwaves/readsb:/out"]
     },
     {
-      "id": "atc", "name": "ATC", "freqMhz": 119.25, "minutes": 3,
+      "id": "atc", "name": "ATC", "freqMhz": 119.25, "minutes": 0.5,
       "image": "ghcr.io/rtl-airband/rtlsdr-airband:v7.0.1",
       "binds": [
         "/mnt/data/supervisor/share/airwaves/rtl_airband.conf:/app/rtl_airband.conf:ro",
@@ -21,21 +21,12 @@
       "extendIfActive": { "withinSec": 30, "maxExtraMinutes": 2 }
     },
     {
-      "id": "ais", "name": "Ships", "freqMhz": 162.0, "minutes": 3,
+      "id": "ais", "name": "Ships", "freqMhz": 162.0, "minutes": 0.5,
       "image": "ghcr.io/jvde-github/ais-catcher:v0.71",
       "cmd": ["-u", "127.0.0.1", "4100"]
     },
     {
-      "id": "adsb", "name": "ADS-B", "freqMhz": 1090, "minutes": 3,
-      "image": "ghcr.io/sdr-enthusiasts/docker-adsb-ultrafeeder:latest-build-845",
-      "entrypoint": ["readsb"],
-      "cmd": ["--device-type", "rtlsdr", "--device", "0", "--gain", "49.6",
-              "--lat", "${HOME_LAT}", "--lon", "${HOME_LON}",
-              "--write-json", "/out", "--write-json-every", "1", "--quiet"],
-      "binds": ["/mnt/data/supervisor/share/airwaves/readsb:/out"]
-    },
-    {
-      "id": "vdl2", "name": "Datalink", "freqMhz": 136.8, "minutes": 2,
+      "id": "vdl2", "name": "Datalink", "freqMhz": 136.8, "minutes": 0.5,
       "image": "ghcr.io/sdr-enthusiasts/docker-dumpvdl2:latest-build-443",
       "entrypoint": ["dumpvdl2"],
       "cmd": ["--rtlsdr", "0", "--gain", "44.5", "--correction", "0",
@@ -43,10 +34,10 @@
               "136650000", "136700000", "136725000", "136775000", "136800000", "136825000", "136875000", "136975000"]
     },
     {
-      "id": "ism", "name": "Sensors", "freqMhz": 315, "minutes": 3,
+      "id": "ism", "name": "Sensors", "freqMhz": 315, "minutes": 0.5,
       "image": "hertzg/rtl_433:25.12",
-      "comment": "915 MHz is listed twice so meters get half the slot; 45 s per hop.",
-      "cmd": ["-f", "315M", "-f", "433.92M", "-f", "915M", "-f", "915M", "-H", "45",
+      "comment": "915 MHz is listed twice so meters get half the slot; 7 s per hop (a 30 s slot).",
+      "cmd": ["-f", "315M", "-f", "433.92M", "-f", "915M", "-f", "915M", "-H", "7",
               "-F", "mqtt://127.0.0.1:1883,user=${MQTT_USER},pass=${MQTT_PASS},retain=0,events=airwaves/rtl_433"]
     },
     {
@@ -82,13 +73,14 @@
       ]
     },
     {
-      "id": "hdradio", "name": "HD Radio", "freqMhz": 98, "minutes": 4, "runsOnce": true,
+      "id": "hdradio", "name": "HD Radio", "freqMhz": 98, "minutes": 3, "runsOnce": true,
+      "comment": "3 minutes: the sweep alone (up to 20 s per station), no dwell.",
       "image": "airwaves-hdradio:local",
       "binds": ["/mnt/data/supervisor/share/airwaves/hdradio:/out"],
-      "env": ["HD_STATIONS=${HD_STATIONS}", "HD_SNIPPET_SEC=12", "HD_DWELL_SEC=60"]
+      "env": ["HD_STATIONS=${HD_STATIONS}", "HD_SNIPPET_SEC=12", "HD_SWEEP_MAX_SEC=20", "HD_DWELL_SEC=0"]
     },
     {
-      "id": "spectrum", "name": "Spectrum", "freqMhz": 500, "minutes": 1,
+      "id": "spectrum", "name": "Spectrum", "freqMhz": 500, "minutes": 1, "everyMinutes": 60,
       "runsOnce": true,
       "image": "ghcr.io/sdr-enthusiasts/docker-adsb-ultrafeeder:latest-build-845",
       "entrypoint": ["rtl_power"],

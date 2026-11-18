@@ -91,6 +91,7 @@ for st in "${stations[@]}"; do
 done
 
 # ---- DWELL ----
+[ "$DWELL" -gt 0 ] || exit 0
 pick="${stations[$(( ($(date +%s) / 1200) % ${#stations[@]} ))]}"
 freq="${pick%%:*}"
 prog="${pick##*:}"

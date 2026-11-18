@@ -82,3 +82,8 @@ export function ago(ts: number | undefined, now: number): string {
   if (m < 60) return `${m} min ago`;
   return `${Math.round(m / 60)} h ago`;
 }
+
+/** Slot length: "30 s" under a minute, else "3 min". */
+export function dur(minutes: number): string {
+  return minutes < 1 ? `${Math.round(minutes * 60)} s` : `${minutes} min`;
+}

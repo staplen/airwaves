@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Snapshot, SpectrumHeat } from '../../../shared/types.ts';
 import { apiUrl } from '../api.ts';
+import { dur } from '../live.ts';
 import { BANDS, FAMILY_COLOR, REF_BANDS, bandAt, dialFreq, dialX } from '../bands.ts';
 
 const TICKS = [100, 200, 300, 500, 700, 1000];
@@ -100,7 +101,7 @@ export function Dial({ snapshot }: { snapshot?: Snapshot }) {
                 const s = snapshot.sources.find((x) => x.id === n.sourceId);
                 return (
                   <span key={i} className="chip" style={{ color: s ? FAMILY_COLOR[s.family] : undefined }}>
-                    {s?.name ?? n.sourceId} {n.minutes} min
+                    {s?.name ?? n.sourceId} {dur(n.minutes)}
                   </span>
                 );
               })}

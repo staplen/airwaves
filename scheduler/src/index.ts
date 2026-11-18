@@ -36,6 +36,7 @@ interface Slot {
   windows?: Window[];
   extendIfActive?: { withinSec: number; maxExtraMinutes: number };
   everyLoops?: number; // only join every Nth pass of the loop (0, N, 2N, …)
+  everyMinutes?: number; // only join a pass if it last ran at least this long ago (e.g. 60 = hourly)
   runsOnce?: boolean; // the decoder does one job and exits (e.g. a spectrum sweep): exit code 0 ends the slot early, normally
 }
 
@@ -128,7 +129,9 @@ function inWindow(s: Slot): boolean {
   return s.windows.some((w) => (!w.days || w.days.includes(day)) && minutes >= toMin(w.start) && minutes < toMin(w.end));
 }
 /** The loop as it stands right now: always-on slots plus any whose window is open. */
-const activeSlots = (pass: number) => allSlots.filter((s) => inWindow(s) && (!s.everyLoops || pass % s.everyLoops === 0));
+const lastRunAt = new Map<Slot, number>();
+const dueByTime = (s: Slot) => !s.everyMinutes || Date.now() - (lastRunAt.get(s) ?? 0) >= (s.everyMinutes - 1) * 60_000 * TIME_SCALE;
+const activeSlots = (pass: number) => allSlots.filter((s) => inWindow(s) && (!s.everyLoops || pass % s.everyLoops === 0) && dueByTime(s));
 
 // ---- arguments -----------------------------------------------------------------------------------
 /** Substitutes ${VAR} from the environment plus ${TS} (UTC timestamp). */
@@ -247,6 +250,7 @@ async function runSlot(loop: Slot[], i: number) {
   let endsAt = since + s.minutes * 60_000 * TIME_SCALE;
   let extra = 0;
   current = s;
+  lastRunAt.set(s, since);
   try {
     await startSlot(s);
     log(`▶ ${s.id} (${s.freqMhz} MHz) for ${s.minutes} min`);
