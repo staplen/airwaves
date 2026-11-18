@@ -206,3 +206,12 @@ button.tog[aria-pressed='false'] { color: var(--muted); }
   .switching .dots i, .seg-switching::after, .seg-next { animation: none; }
   .switching .dots i { opacity: 1; }
 }
+
+/* Segments are at least as wide as their label, so names never truncate (time proportions give way). */
+.strip-bar .seg { min-width: max-content; }
+.strip-bar .seg-label { overflow: visible; text-overflow: clip; padding: 0 6px; }
+/* Narrower screens: back to proportional widths with ellipsis; phones hide labels entirely. */
+@media (max-width: 1100px) {
+  .strip-bar .seg { min-width: 0; }
+  .strip-bar .seg-label { overflow: hidden; text-overflow: ellipsis; padding: 0 4px; }
+}
