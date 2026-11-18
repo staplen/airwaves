@@ -13,7 +13,7 @@ RUN git clone --depth 1 --branch v3.2.0 https://github.com/theori-io/nrsc5 /src/
 
 FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libao4 libfftw3-single3 librtlsdr2 libusb-1.0-0 lame \
+    libao4 libfftw3-single3 librtlsdr0 libusb-1.0-0 lame \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /usr/local/bin/nrsc5 /usr/local/bin/nrsc5
 COPY --from=build /usr/local/lib/ /usr/local/lib/
