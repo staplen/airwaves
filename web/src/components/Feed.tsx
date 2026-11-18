@@ -15,6 +15,8 @@ const CATEGORIES: { family: Family; subs: { id: string; label: string; kinds: st
   { family: 'bcast', subs: [{ id: 'radio-hd', label: 'HD Radio', kinds: ['Radio'] }] },
   { family: 'home', subs: [{ id: 'street', label: 'Tire sensors', kinds: ['Street'] }, { id: 'sensors', label: 'Sensors', kinds: ['Sensor'] }, { id: 'meter', label: 'Gas meter', kinds: ['Home'] }] },
 ];
+// Every filter id: each sub-category plus a per-family catch-all for kinds we don't know yet.
+const ALL_IDS = CATEGORIES.flatMap((c) => [...c.subs.map((s) => s.id), `family:${c.family}`]);
 const SUB_OF_KIND = new Map(CATEGORIES.flatMap((c) => c.subs.flatMap((s) => s.kinds.map((k) => [k, s.id] as const))));
 const HIDDEN_KEY = 'airwaves.hiddenCatches';
 
@@ -87,7 +89,7 @@ export function Feed({ items }: { items: FeedItem[] }) {
       <div className="feed-head">
         <h2>Catches</h2>
         <div className="filters" role="group" aria-label="Show or hide catches" ref={menuRoot}>
-          <button type="button" className="filt" aria-pressed={hidden.size === 0} onClick={() => save(new Set())}>
+          <button type="button" className="filt" aria-pressed={hidden.size === 0} onClick={() => save(hidden.size === 0 ? new Set(ALL_IDS) : new Set())} title={hidden.size === 0 ? 'Hide everything, then pick what to show' : 'Show everything'}>
             All
           </button>
           {CATEGORIES.map((c) => {
@@ -125,7 +127,14 @@ export function Feed({ items }: { items: FeedItem[] }) {
         </div>
       </div>
       <div className="feed-list">
-        {shown.length === 0 && <div className="card empty">Nothing caught here yet.</div>}
+        {shown.length === 0 &&
+          (ALL_IDS.every((id) => hidden.has(id)) ? (
+            <div className="card empty">Everything is hidden. Pick a type above to show just that, or click All to show everything.</div>
+          ) : hidden.size > 0 ? (
+            <div className="card empty">Nothing caught for the selected types yet.</div>
+          ) : (
+            <div className="card empty">Nothing caught here yet.</div>
+          ))}
         {shown.map((i) => (
           <article key={i.id} className="card catch">
             <div className="bar" style={{ background: FAMILY_COLOR[i.family] }} />
