@@ -39,7 +39,6 @@ button.tog { cursor: pointer; }
 button.tog[aria-pressed='false'] { color: var(--muted); }
 
 /* Header */
-.top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
 .brand { display: flex; align-items: center; gap: 10px; }
 .brand b { font-size: 18px; letter-spacing: -0.01em; }
 
@@ -107,16 +106,12 @@ button.tog[aria-pressed='false'] { color: var(--muted); }
 .raw summary { cursor: pointer; min-height: 24px; }
 .raw code { display: block; margin-top: 4px; font-family: var(--mono); font-size: 11px; color: var(--text-2); word-break: break-all; white-space: pre-wrap; }
 
-/* Header: logo, title, status, dial toggle and About in one 32px row */
-.top { flex-wrap: nowrap; gap: 12px; min-height: 32px; }
 .logo { flex: none; }
-.top-time { font-size: 13px; flex: none; }
 .strip-toggle { flex: none; width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--card); color: var(--text-2); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
 .strip-toggle:hover { color: var(--text); }
 .strip-toggle svg { transition: transform .15s ease; }
 
 @media (max-width: 720px) {
-  .top { gap: 8px; }
   .strip-toggle { width: 28px; height: 28px; }
 }
 
@@ -231,7 +226,13 @@ button.ftoken { font: inherit; font-size: 12px; cursor: pointer; padding: 3px 10
 .nav-card .muted { font-size: 11px; }
 
 /* Loop band: one tile per slot; the one on air grows into a hero card */
-.top-title { font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+/* Brand and buttons live at the two ends of the loop band (no separate header row) */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.lb-brand { order: -2; flex: none; display: flex; flex-direction: column; justify-content: center; gap: 4px; padding: 2px 6px 2px 2px; }
+.lb-title { font-size: 13px; font-weight: 600; letter-spacing: -.01em; }
+.lb-status { font-size: 10px; color: var(--muted); max-width: 80px; }
+.lb-end { order: 99; flex: none; display: flex; flex-direction: column; justify-content: center; gap: 6px; }
+.lb-break { display: none; }
 .loopband { display: flex; gap: 8px; }
 .lt { position: relative; flex: 1 1 0; min-width: 0; padding: 10px 12px; border-radius: 12px; background: var(--card); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 1px; overflow: hidden; transition: flex-grow .6s ease, background .4s, border-color .4s, opacity .4s; }
 .lt.now { flex-grow: 2.6; border-color: var(--c); background: color-mix(in srgb, var(--c) 9%, var(--card)); }
@@ -256,6 +257,10 @@ button.ftoken { font: inherit; font-size: 12px; cursor: pointer; padding: 3px 10
 .lt-prog { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--c); transition: width 1s linear; }
 @media (max-width: 1100px) {
   .loopband { flex-wrap: wrap; }
+  /* Brand and buttons share the first row; tiles start on the next */
+  .lb-brand { flex-direction: row; align-items: center; gap: 8px; }
+  .lb-end { order: -1; flex-direction: row; margin-left: auto; }
+  .lb-break { display: block; order: -1; flex-basis: 100%; height: 0; }
   .lt { flex: 1 1 calc(25% - 8px); }
   .lt.now { flex-basis: 100%; }
 }

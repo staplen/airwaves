@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { Snapshot } from '../../../shared/types.ts';
 import { FAMILY_COLOR } from '../bands.ts';
 import { SOURCE_TYPES, showOnlySource } from '../feedFilter.ts';
@@ -10,7 +11,7 @@ const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.max(0, Math.ro
  * into a larger card with the frequency, countdown and progress; the others show today's number, one
  * line worth reading, and when they're next on air. Clicking a tile filters the feed to that source.
  */
-export function LoopBand({ snapshot }: { snapshot?: Snapshot }) {
+export function LoopBand({ snapshot, start, end }: { snapshot?: Snapshot; start?: ReactNode; end?: ReactNode }) {
   const rot = snapshot?.rotation;
   const now = snapshot?.now ?? Date.now();
   const cur = rot?.current;
@@ -26,6 +27,9 @@ export function LoopBand({ snapshot }: { snapshot?: Snapshot }) {
 
   return (
     <section className="loopband" aria-label="What the radio is listening to, and what it has heard today">
+      {start}
+      {end}
+      <i className="lb-break" aria-hidden="true" />
       {ids.map((id) => {
         const so = snapshot?.sources.find((s) => s.id === id);
         const name = so?.name ?? slotName(id);
