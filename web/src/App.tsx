@@ -3,8 +3,7 @@ import { About } from './components/About.tsx';
 import { Dial } from './components/Dial.tsx';
 import { Feed } from './components/Feed.tsx';
 import { MapView } from './components/MapView.tsx';
-import { RotationStrip } from './components/RotationStrip.tsx';
-import { Totals } from './components/Totals.tsx';
+import { LoopBand } from './components/LoopBand.tsx';
 import { SensorPins } from './components/SensorPins.tsx';
 import { isStatic } from './api.ts';
 import { ago, useLive } from './live.ts';
@@ -51,13 +50,19 @@ export function App() {
           <circle cx="16" cy="16" r="3.2" fill={connected ? '#4ade80' : '#8b93a1'} />
           <path d="M11.76 11.76 A6 6 0 0 0 11.76 20.24 M20.24 11.76 A6 6 0 0 1 20.24 20.24 M8.22 8.22 A11 11 0 0 0 8.22 23.78 M23.78 8.22 A11 11 0 0 1 23.78 23.78" fill="none" stroke="#e6e9ee" strokeWidth="2.2" strokeLinecap="round" />
         </svg>
-        <RotationStrip snapshot={view} expanded={dialOpen} onToggle={toggle} />
+        <span className="top-title">Airwaves</span>
+        <span style={{ flex: 1 }} />
         {stale && <span className="muted top-time">Last updated {ago(snapshot.publishedAt, Date.now())}</span>}
         {!connected && <span className="muted top-time">Reconnecting…</span>}
+        <button type="button" className="strip-toggle" aria-expanded={dialOpen} aria-label={dialOpen ? 'Hide receiver details' : 'Show receiver details'} title="Receiver dial and spectrum" onClick={toggle}>
+          <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" style={{ transform: dialOpen ? 'rotate(180deg)' : undefined }}>
+            <path d="M3 5 L7 9 L11 5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
         <About />
       </header>
+      <LoopBand snapshot={view} />
       {dialOpen && <Dial snapshot={view} />}
-      <Totals snapshot={view} />
       <SensorPins snapshot={view} />
       <div className="main">
         <MapView snapshot={snapshot} />

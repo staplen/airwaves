@@ -3,7 +3,7 @@ import { createSocket } from 'node:dgram';
 import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, extname, join, normalize } from 'node:path';
 import { connect as mqttConnect } from 'mqtt';
-import type { Aircraft, AisFixed, Balloon, FeedItem, Overlays, Pin, PinMetric, RadioStation, SchedulerState, SensorInfo, Snapshot, SourceStatus, SpectrumHeat, Vessel } from '../../shared/types.ts';
+import type { Aircraft, AisFixed, Balloon, FeedItem, Overlays, Pin, PinMetric, RadioStation, SchedulerState, SensorInfo, SlotStat, Snapshot, SourceStatus, SpectrumHeat, Vessel } from '../../shared/types.ts';
 import { AdsbSource } from './adsb.ts';
 import { AisDecoder, shipTypeName } from './ais.ts';
 import { ClipWatcher, type Clip } from './clips.ts';
@@ -121,6 +121,7 @@ function snapshot(): Snapshot {
           upNext: scheduler!.upNext.map((u) => ({ sourceId: u.slotId, minutes: u.minutes })),
           loop: scheduler!.loop?.map((u) => ({ sourceId: u.slotId, minutes: u.minutes })),
           index: scheduler!.index,
+          slots: scheduler!.slots,
         }
       : { mode: 'continuous', current: { sourceId: 'adsb', freqMhz: 1090, since: startedAt }, upNext: [] },
     sources: SOURCES.map((s) => ({
@@ -151,6 +152,7 @@ function snapshot(): Snapshot {
       avgRssi: rssis.length ? rssis.reduce((a, b) => a + b, 0) / rssis.length : undefined,
     },
     sensors: [...sensors.values()].filter((x) => now - x.lastSeen < 86_400_000).sort((a, b) => (localDay(b.lastSeen) === day ? b.heardToday : 0) - (localDay(a.lastSeen) === day ? a.heardToday : 0) || b.lastSeen - a.lastSeen).slice(0, 40),
+    slotStats: slotStats(now, aircraft),
     pinned: pins.map((p) => {
       const x = sensors.get(p.key);
       return { ...p, value: x?.[p.metric], unit: p.metric === 'temperatureF' ? '°F' : '%', lastSeen: x?.lastSeen };
@@ -163,6 +165,62 @@ function slotFailure(id: string, now: number): string | undefined {
   const f = scheduler?.failures?.[id];
   const loopMs = (scheduler?.loopMinutes ?? 19) * 60_000 * 1.2;
   return f && now - f.at < loopMs ? `Slot failed: ${f.reason}` : undefined;
+}
+
+
+// ---- header tiles: one headline number + one interesting line per slot ---------------------
+let trainsToday = { day: '', bursts: 0 };
+let statsCache: { at: number; value: Record<string, SlotStat> } | undefined;
+const fmtAltFt = (ft: number) => (ft >= 18000 ? `FL${Math.round(ft / 100)}` : `${ft.toLocaleString('en-US')} ft`);
+const top = (xs: string[]) => {
+  const m = new Map<string, number>();
+  for (const x of xs) m.set(x, (m.get(x) ?? 0) + 1);
+  return [...m].sort((a, b) => b[1] - a[1])[0]?.[0];
+};
+const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+
+function slotStats(now: number, aircraft: Aircraft[]): Record<string, SlotStat> {
+  // Cheap parts (live aircraft) are recomputed every call; the feed-derived parts every 15 s.
+  const day = localDay(now);
+  if (!statsCache || now - statsCache.at > 15_000) {
+    const today = store.recentFeed(1500).filter((f) => localDay(f.ts) === day);
+    const hourAgo = now - 3600_000;
+    const atc = today.filter((f) => f.kind === 'ATC');
+    const atcHour = atc.filter((f) => f.ts >= hourAgo);
+    const airlines = today.filter((f) => f.kind === 'Datalink').map((f) => f.title.match(/^([A-Za-z][A-Za-z&'. ()-]*?)\s\d/)?.[1]).filter((x): x is string => !!x && !/^Aircraft/.test(x));
+    const songs = today.filter((f) => f.kind === 'Radio');
+    const lastSong = songs.find((f) => f.tag !== 'Station message') ?? songs[0];
+    const wxClips = today.filter((f) => f.kind === 'Weather').length;
+    const alerts = today.filter((f) => f.kind === 'Weather alert').length;
+    const tests = today.filter((f) => f.kind === 'Weather test');
+    const ships = store.countSightings(day, 'ship');
+    const lastShip = [...vessels.values()].sort((a, b) => b.lastSeen - a.lastSeen)[0];
+    const cars = store.countSightings(day, 'tpms', 1, 1);
+    const pinnedTemp = pins.find((p) => p.metric === 'temperatureF');
+    const temp = pinnedTemp && sensors.get(pinnedTemp.key)?.temperatureF;
+    const balloons = sondes.recent(now);
+    const v: Record<string, SlotStat> = {
+      atc: { value: atc.length.toLocaleString('en-US'), label: 'calls today', detail: atcHour.length ? `${atcHour.length} this hour · busiest ${top(atcHour.map((f) => f.title))}` : undefined },
+      ais: { value: String(ships), label: 'ships today', detail: lastShip && now - lastShip.lastSeen < 86_400_000 ? `latest: ${lastShip.name ?? lastShip.mmsi}` : aisFixed.size ? `${plural(aisFixed.size, 'channel marker')} heard` : undefined },
+      vdl2: { value: store.countSightings(day, 'vdl2').toLocaleString('en-US'), label: 'flights on datalink', detail: top(airlines) ? `top airline: ${top(airlines)}` : undefined },
+      ism:
+        temp !== undefined
+          ? { value: `${Math.round(temp)}°F`, label: pinnedTemp!.label, detail: plural(cars, 'car') + ' passed today' }
+          : { value: String(cars), label: 'cars passed', detail: sensors.size ? `${plural(sensors.size, 'sensor')} heard` : undefined },
+      trains: { value: String(trainsToday.day === day ? trainsToday.bursts : 0), label: 'train bursts', detail: 'probe on 457.94 MHz' },
+      noaa: { value: String(wxClips), label: 'weather radio clips', detail: alerts ? plural(alerts, 'alert') + ' today' : tests.length ? `weekly test at ${new Date(tests[0].ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: env.TIMEZONE ?? 'America/New_York' })}` : 'no alerts today' },
+      sonde: { value: String(balloons.length), label: balloons.length === 1 ? 'balloon' : 'balloons', detail: balloons[0] ? `${balloons[0].id} at ${(balloons[0].altM / 1000).toFixed(1)} km` : 'launches ~7 AM & 7 PM' },
+      hdradio: { value: String(songs.length), label: 'songs today', detail: lastSong ? `${lastSong.body} · ${lastSong.title.replace(/ HD\d$/, '')}` : undefined },
+      spectrum: { label: 'spectrum sweep', detail: 'hourly · 80–1150 MHz' },
+    };
+    statsCache = { at: now, value: v };
+  }
+  const live = aircraft.filter((a) => a.seen < 60 && a.lat !== undefined);
+  const highest = Math.max(0, ...live.map((a) => (typeof a.altBaro === 'number' ? a.altBaro : 0)));
+  return {
+    ...statsCache.value,
+    adsb: { value: store.aircraftCount(day).toLocaleString('en-US'), label: 'aircraft today', detail: live.length ? `${live.length} overhead${highest ? ` · highest ${fmtAltFt(highest)}` : ''}` : undefined },
+  };
 }
 
 // ---- public view: approximate home location, no distances -----------------------------------
@@ -584,7 +642,12 @@ async function housekeeping() {
 async function ingestFiles() {
   const now = Date.now();
   if (await ingestSpectrum(SPECTRUM_DIR, store)) heard('spectrum', now);
-  await ingestTrains(TRAINS_DIR);
+  const bursts = await ingestTrains(TRAINS_DIR);
+  if (bursts) {
+    const d = localDay(now);
+    trainsToday = { day: d, bursts: (trainsToday.day === d ? trainsToday.bursts : 0) + bursts };
+    store.setState('trainsToday', trainsToday);
+  }
   mkdirSync(ART_DIR, { recursive: true });
   const radioClips = CLIPS_ROOT ? join(CLIPS_ROOT, 'radio') : undefined;
   for (const c of await ingestHdRadio(HD_DIR, ART_DIR, radioClips)) {
@@ -651,6 +714,7 @@ function loadState() {
   for (const r of store.getState<RadioStation[]>('radio') ?? []) if (r.updatedAt > day) radio.set(r.key, r);
   for (const x of store.getState<SensorInfo[]>('sensors') ?? []) if (x.lastSeen > day) sensors.set(x.key, x);
   pins = store.getState<Pin[]>('pins') ?? [];
+  trainsToday = store.getState<typeof trainsToday>('trainsToday') ?? trainsToday;
   for (const b of store.getState<Balloon[]>('balloons') ?? []) if (b.lastSeen > day) sondes.flights.set(b.id, b);
 }
 loadState();

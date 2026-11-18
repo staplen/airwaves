@@ -93,6 +93,15 @@ export interface Rotation {
   /** The whole current pass in order; `index` is the running entry. */
   loop?: { sourceId: string; minutes: number }[];
   index?: number;
+  /** Every slot id the scheduler knows, in loop order (windowed and hourly ones included). */
+  slots?: string[];
+}
+
+/** The header tile for one slot: today's headline number and a one-line detail worth reading. */
+export interface SlotStat {
+  value?: string; // "387", "54°F"; absent when there's nothing to count
+  label: string; // "aircraft today"
+  detail?: string; // "14 overhead · highest FL410"
 }
 
 export interface FeedItem {
@@ -152,6 +161,7 @@ export interface Snapshot {
   publishedAt?: number; // epoch ms the public copy was uploaded (static site only)
   sensors?: SensorInfo[]; // recent 315/433 MHz sensors, most-heard first (local view only)
   pinned?: PinnedStat[]; // sensor readings pinned to the top stats
+  slotStats?: Record<string, SlotStat>; // header tile per slot id
 }
 
 export type PinMetric = 'temperatureF' | 'humidity';
