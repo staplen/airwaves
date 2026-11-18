@@ -12,16 +12,15 @@ Home Assistant OS path mapping (the SSH session runs in its own container):
 
 1. **MQTT login.** Mosquitto broker add-on → Configuration → `logins`: add
    `username: airwaves` with a password. Save and restart the add-on.
-2. **Code.** On the Mac: `./deploy/bundle.sh`, then serve `deploy/out/` over HTTP.
-   On the Pi: `mkdir -p /share/airwaves/app && curl -fsSL http://<mac-ip>:8000/airwaves.tgz | tar -xz -C /share/airwaves/app`
+2. **Code.** `git clone https://github.com/staplen/airwaves.git /share/airwaves/app`
+   (install git first with `apk add git` if the SSH add-on lacks it).
 3. **Folders and settings.**
    `mkdir -p /share/airwaves/data /share/airwaves/spectrum /share/airwaves/readsb /share/airwaves/hdradio/aas /share/airwaves/sonde/log /media/airwaves/atc /media/airwaves/noaa`
    `cp /share/airwaves/app/deploy/airwaves.env.example /share/airwaves/airwaves.env` and fill in
    `MQTT_PASS`, `HOME_LAT`/`HOME_LON` (receiver location, used only on the Pi) and `HD_STATIONS`.
    `cp /share/airwaves/app/deploy/sonde/station.cfg /share/airwaves/sonde/station.cfg` (uploads disabled).
-4. **Local images** (once, and again when their folder changes):
-   `docker build -t airwaves-noaa:local /share/airwaves/app/deploy/noaa`
-   `docker build -t airwaves-hdradio:local /share/airwaves/app/deploy/hdradio` (compiles nrsc5; several minutes on a Pi 4)
+4. **Build** the dashboard and local decoder images: `sh /share/airwaves/app/deploy/update.sh`
+   (the first run of the HD Radio image compiles nrsc5 and takes several minutes on a Pi 4).
 5. **Collector + dashboard** on port 8090:
 
    ```bash
@@ -46,9 +45,9 @@ Home Assistant OS path mapping (the SSH session runs in its own container):
      sh -c "npm ci --omit=dev --no-audit --no-fund && exec node scheduler/src/index.ts"
    ```
 
-**Updating:** rebuild and serve the bundle on the Mac, then on the Pi
-`curl -fsSL http://<mac-ip>:8000/airwaves.tgz | tar -xz -C /share/airwaves/app && docker restart airwaves-collector airwaves-scheduler`
-(rebuild a local image only if its `deploy/` folder changed).
+**Updating:** `sh /share/airwaves/app/deploy/update.sh` pulls from GitHub, rebuilds the dashboard,
+rebuilds a local decoder image only if its `deploy/` folder changed, and restarts the collector and
+scheduler. (`deploy/bundle.sh` still makes a tarball if you ever need to update without GitHub.)
 
 **ADS-B** runs as a light `readsb` slot that writes JSON to `/share/airwaves/readsb`; the collector
 reads those files and falls back to Ultrafeeder's port 8080 if they're missing. Ultrafeeder is the
