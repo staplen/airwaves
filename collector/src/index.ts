@@ -116,7 +116,7 @@ function snapshot(): Snapshot {
     sources: SOURCES.map((s) => ({
       ...s,
       running: s.id === 'adsb' || planned.has(s.id),
-      lastHeard: s.id === 'adsb' ? adsb.lastHeard : lastHeard.get(s.id),
+      lastHeard: lastHeardFor(s.id, now),
       error:
         s.id === 'adsb' && adsb.lastError && adsbExpected
           ? `Receiver unreachable (${adsb.lastError})`
@@ -159,6 +159,21 @@ function publicItem(f: FeedItem): FeedItem {
   return f.kind === 'Aircraft' ? { ...f, body: f.body.replace(DISTANCE_TEXT, '') } : f;
 }
 const isPublic = (req: { headers: Record<string, string | string[] | undefined> }) => FORCE_PUBLIC || Boolean(req.headers['cf-connecting-ip'] || req.headers['cf-ray']);
+
+// "Last heard" per source: live value if we have one, else the newest sighting in the database
+// (so a collector restart doesn't turn sources with data back into "not heard yet").
+const DB_SOURCES: Record<string, string[]> = { adsb: ['aircraft'], atc: ['atc'], vdl2: ['vdl2'], ais: ['ship'], ism: ['tpms', 'meter', 'sensor'] };
+let dbLastCache: { at: number; values: Record<string, number | undefined> } = { at: 0, values: {} };
+function lastHeardFor(id: string, now: number): number | undefined {
+  const live = id === 'adsb' ? adsb.lastHeard : lastHeard.get(id);
+  if (now - dbLastCache.at > 60_000) {
+    const values: Record<string, number | undefined> = {};
+    for (const [k, srcs] of Object.entries(DB_SOURCES)) values[k] = store.lastSeen(srcs);
+    dbLastCache = { at: now, values };
+  }
+  const db = dbLastCache.values[id];
+  return Math.max(live ?? 0, db ?? 0) || undefined;
+}
 
 function send(res: ServerResponse, event: string, data: unknown) {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -554,6 +569,7 @@ setInterval(() => void ingestFiles(), 60_000);
 
 // ---- state that survives restarts: ships, buoys, home location ------------------------------------
 function saveState() {
+  store.setState('lastHeard', Object.fromEntries(lastHeard));
   store.setState('vessels', [...vessels.values()]);
   store.setState('aisFixed', [...aisFixed.values()]);
   if (adsb.home) store.setState('home', adsb.home);
@@ -561,6 +577,7 @@ function saveState() {
   store.setState('radio', [...radio.values()]);
 }
 function loadState() {
+  for (const [k, v] of Object.entries(store.getState<Record<string, number>>('lastHeard') ?? {})) if (typeof v === 'number') lastHeard.set(k, v);
   const day = Date.now() - 86_400_000;
   for (const v of store.getState<Vessel[]>('vessels') ?? []) if (v.lastSeen > day) vessels.set(v.mmsi, v);
   for (const f of store.getState<AisFixed[]>('aisFixed') ?? []) aisFixed.set(f.mmsi, f);

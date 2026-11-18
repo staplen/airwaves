@@ -121,6 +121,18 @@ export class Store {
     return { first: false, passes };
   }
 
+  /** Most recent sighting time for any of these sources (sightings table or aircraft), or undefined. */
+  lastSeen(sources: string[]): number | undefined {
+    let best = 0;
+    for (const src of sources) {
+      const row = (src === 'aircraft'
+        ? this.db.prepare('SELECT MAX(last_seen) AS t FROM aircraft_day').get()
+        : this.db.prepare('SELECT MAX(last_seen) AS t FROM sightings WHERE source = ?').get(src)) as { t: number | null };
+      if (row?.t && row.t > best) best = row.t;
+    }
+    return best || undefined;
+  }
+
   countSightings(day: string, source: string, minPasses = 1, maxPasses = 1e9): number {
     const row = this.db
       .prepare('SELECT COUNT(*) AS n FROM sightings WHERE day = ? AND source = ? AND passes >= ? AND passes <= ?')

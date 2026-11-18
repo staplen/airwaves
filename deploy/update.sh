@@ -55,7 +55,7 @@ echo "== recreating collector and scheduler"
 ENVFILE=/share/airwaves/airwaves.env
 SHARE=/mnt/data/supervisor/share/airwaves
 MEDIA=/mnt/data/supervisor/media/airwaves
-docker stop airwaves-scheduler >/dev/null 2>&1 || true  # graceful: frees the dongle
+docker stop airwaves-scheduler airwaves-collector >/dev/null 2>&1 || true  # graceful: frees the dongle, saves state
 docker rm -f airwaves-collector airwaves-scheduler >/dev/null 2>&1 || true
 docker run -d --name airwaves-collector --restart unless-stopped --network host --env-file "$ENVFILE" \
   -e PORT=8090 -e ADSB_URL=http://127.0.0.1:8080/data -e CLIPS_ROOT=/clips \
