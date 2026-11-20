@@ -8,6 +8,7 @@ function packet(unit: number, psi: number, moving: boolean, marker: boolean): st
   const put = (at: number, width: number, v: number) => {
     for (let i = 0; i < width; i++) p[at + i] = (v >> i) & 1 ? '1' : '0';
   };
+  put(11, 2, 0b11); // chaining: single block
   put(13, 2, 0b11); // battery condition OK
   put(18, 17, unit);
   put(35, 7, psi);
@@ -48,4 +49,14 @@ test('corrects one flipped bit, rejects garbage', () => {
   assert.equal(r[0]?.unit, 4074);
   assert.equal(r[0]?.bitsFixed, 1);
   assert.equal(decodeEot(audio('1'.repeat(74)), 12_000).length, 0);
+});
+
+test('head-of-train: status request and emergency blocks round-trip through the decoder', async () => {
+  const { decodeHot, hotBlock, parseHot } = await import('../src/eot.ts');
+  assert.deepEqual(parseHot(hotBlock(54509, 'status request')), { unit: 54509, command: 'status request' });
+  const block = hotBlock(54509, 'status request');
+  assert.equal(parseHot(block.slice(0, 40) + (block[40] === '1' ? '0' : '1') + block.slice(41)), undefined); // a flipped bit fails the check
+  const sync = '010101100011110001000100101001';
+  const r = decodeHot(audio(sync + hotBlock(4074, 'emergency brake')), 12_000);
+  assert.deepEqual(r, [{ unit: 4074, command: 'emergency brake' }]);
 });

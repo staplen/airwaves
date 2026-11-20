@@ -1,11 +1,13 @@
-import { appendFile, mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, readFile, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { decodeEot, decodeHot, type EotPacket, type HotPacket } from './eot.ts';
 
-// Train probe (not on the dashboard yet). A short scheduler slot runs rtl_fm on the end-of-train
-// frequency (457.9375 MHz) and writes raw audio: 16-bit mono, 12 kHz. End-of-train devices send short
+// Train probe. Short scheduler slots run rtl_fm on the end-of-train frequency (457.9375 MHz) and, at night, the
+// locomotive's (452.9375 MHz), writing raw audio: 16-bit mono, 12 kHz. End-of-train devices send short
 // 1200-baud FFSK bursts (1200 / 1800 Hz tones), so we look for stretches where most of the audio energy
-// sits in that band (FM hiss is spread flat up to 6 kHz), keep each burst (with a little padding) as a WAV for later decoding, and
-// log a line per run and per burst to review/log.jsonl. The raw recording is then deleted.
+// sits in that band (FM hiss is spread flat up to 6 kHz), decode each burst's end-of-train packet straight from the
+// samples, and log a line per run and per burst (with what it decoded to) to review/log.jsonl. No audio is kept:
+// the raw recording is deleted once processed.
 
 export const SAMPLE_RATE = 12_000;
 const WIN = 240; // 20 ms windows
@@ -78,23 +80,6 @@ export function findBursts(x: Int16Array): { bursts: Burst[]; noiseRms: number }
   return { bursts, noiseRms: rms.length ? rms[Math.floor(rms.length / 2)] : 0 };
 }
 
-function wav(samples: Int16Array): Buffer {
-  const h = Buffer.alloc(44);
-  h.write('RIFF', 0);
-  h.writeUInt32LE(36 + samples.byteLength, 4);
-  h.write('WAVEfmt ', 8);
-  h.writeUInt32LE(16, 16);
-  h.writeUInt16LE(1, 20);
-  h.writeUInt16LE(1, 22);
-  h.writeUInt32LE(SAMPLE_RATE, 24);
-  h.writeUInt32LE(SAMPLE_RATE * 2, 28);
-  h.writeUInt16LE(2, 32);
-  h.writeUInt16LE(16, 34);
-  h.write('data', 36);
-  h.writeUInt32LE(samples.byteLength, 40);
-  return Buffer.concat([h, Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength)]);
-}
-
 /** "eot_20261118_171200.raw" → epoch ms (UTC). */
 function startOf(name: string, fallback: number): number {
   const m = name.match(/(\d{4})(\d\d)(\d\d)_(\d\d)(\d\d)(\d\d)/);
@@ -103,32 +88,11 @@ function startOf(name: string, fallback: number): number {
 
 export interface TrainBurst {
   at: number; // epoch ms
-  file: string; // WAV in <dir>/review
+  file: string; // burst name (older bursts: a WAV in <dir>/review)
   ms: number;
   score: number;
-}
-
-/** Bursts logged in <dir>/review/log.jsonl since `sinceMs` whose WAV is still there (for backfilling the feed). */
-export async function loggedBursts(dir: string, sinceMs: number): Promise<TrainBurst[]> {
-  const review = join(dir, 'review');
-  let text = '';
-  try {
-    text = await readFile(join(review, 'log.jsonl'), 'utf8');
-  } catch {
-    return [];
-  }
-  const have = new Set(await readdir(review));
-  const out: TrainBurst[] = [];
-  for (const line of text.split('\n')) {
-    try {
-      const l = JSON.parse(line) as { type?: string; at?: string; file?: string; ms?: number; score?: number };
-      const at = l.at ? Date.parse(l.at) : NaN;
-      if (l.type === 'burst' && l.file && have.has(l.file) && at >= sinceMs) out.push({ at, file: l.file, ms: l.ms ?? 0, score: l.score ?? 0 });
-    } catch {
-      /* partial line */
-    }
-  }
-  return out;
+  packets?: EotPacket[]; // decoded end-of-train packets (empty: too noisy)
+  hot?: HotPacket[]; // locomotive commands, when the burst came from the head-of-train side
 }
 
 /** Processes finished recordings in `dir`; returns the bursts kept. */
@@ -157,9 +121,12 @@ export async function ingestTrains(dir: string): Promise<TrainBurst[]> {
         const name = `eot_${at.toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15)}_${Math.round(b.startS * 10)}.wav`;
         const a = Math.max(0, Math.floor((b.startS - PAD_S) * SAMPLE_RATE));
         const z = Math.min(x.length, Math.ceil((b.endS + PAD_S) * SAMPLE_RATE));
-        await writeFile(join(review, name), wav(x.slice(a, z)));
-        lines.push({ type: 'burst', at: at.toISOString(), file: name, ms: Math.round((b.endS - b.startS) * 1000), score: Number(b.score.toFixed(2)) });
-        kept.push({ at: at.getTime(), file: name, ms: Math.round((b.endS - b.startS) * 1000), score: Number(b.score.toFixed(2)) });
+        const audio = x.slice(a, z);
+        const packets = decodeEot(audio, SAMPLE_RATE);
+        const hot = packets.length ? [] : decodeHot(audio, SAMPLE_RATE);
+        const burst = { at: at.getTime(), file: name.replace(/\.wav$/, ''), ms: Math.round((b.endS - b.startS) * 1000), score: Number(b.score.toFixed(2)), packets, hot };
+        lines.push({ type: 'burst', ...burst, at: at.toISOString() });
+        kept.push(burst);
       }
       await appendFile(join(review, 'log.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
       console.log(`trains ${f}: ${bursts.length} burst(s), noise rms ${Math.round(noiseRms)}`);

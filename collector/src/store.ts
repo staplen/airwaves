@@ -91,6 +91,11 @@ export class Store {
     return this.db.prepare('SELECT id, ts, title, body, clip FROM feed WHERE kind = ? ORDER BY ts DESC').all(kind) as { id: number; ts: number; title: string; body: string; clip?: string }[];
   }
 
+  /** Drops the audio from every item of a kind (decoded signals don't keep their recordings). */
+  clearClips(kind: string): number {
+    return Number(this.db.prepare('UPDATE feed SET clip = NULL, peaks = NULL WHERE kind = ? AND clip IS NOT NULL').run(kind).changes);
+  }
+
   setTitleBody(id: number, title: string, body: string) {
     this.db.prepare('UPDATE feed SET title = ?, body = ? WHERE id = ?').run(title, body, id);
   }

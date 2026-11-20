@@ -28,22 +28,3 @@ test('pure noise has no bursts', () => {
   const x = new Int16Array(SAMPLE_RATE * 20).map(() => Math.round(rand() * 9000));
   assert.equal(findBursts(x).bursts.length, 0);
 });
-
-test('reads logged bursts whose WAV still exists', async () => {
-  const { mkdtemp, mkdir, writeFile } = await import('node:fs/promises');
-  const { tmpdir } = await import('node:os');
-  const { join } = await import('node:path');
-  const { loggedBursts } = await import('../src/trains.ts');
-  const dir = await mkdtemp(join(tmpdir(), 'trains-'));
-  await mkdir(join(dir, 'review'));
-  await writeFile(join(dir, 'review', 'a.wav'), '');
-  const lines = [
-    { type: 'run', at: '2026-11-20T03:00:00Z', bursts: 1 },
-    { type: 'burst', at: '2026-11-20T03:20:00.820Z', file: 'a.wav', ms: 100, score: 0.71 },
-    { type: 'burst', at: '2026-11-20T04:00:00Z', file: 'gone.wav', ms: 90, score: 0.7 },
-    { type: 'burst', at: '2026-11-01T00:00:00Z', file: 'a.wav', ms: 90, score: 0.7 },
-  ];
-  await writeFile(join(dir, 'review', 'log.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n{"partial');
-  const got = await loggedBursts(dir, Date.parse('2026-11-15T00:00:00Z'));
-  assert.deepEqual(got, [{ at: Date.parse('2026-11-20T03:20:00.820Z'), file: 'a.wav', ms: 100, score: 0.71 }]);
-});

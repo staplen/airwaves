@@ -2,6 +2,10 @@
 // Layout (public, from Eric Reuter's DEF CON 26 talk on EOT telemetry): bit sync …101010, 11-bit frame sync
 // 11100010010, a 45-bit data block, then 18 BCH check bits (generator 1111001101000001111) XORed with
 // 101011011101110000. Multi-bit fields are sent least significant bit first. Written from that description.
+// Checked against the talk's slides: same tones (mark 1200 Hz = 1), FFSK at 1200 baud, BCH (63,45) with an XOR
+// cipher, trailing 1 bit. The slides list the frame sync and generator in the opposite bit order, and put message
+// type before battery condition; real packets here validate with this order (chaining 11, battery 11 = OK, message
+// type 000), which is also the order in the talk author's PyEOT code.
 
 const BAUD = 1200;
 const SYNC = '10101011100010010'; // last 6 bits of the bit sync + the frame sync
@@ -17,6 +21,8 @@ export interface EotPacket {
   moving: boolean;
   markerLight: boolean; // the flashing light on the back of the last car
   arming: boolean; // message type 111: pairing with the locomotive's head-of-train device
+  replying: boolean; // confirmation bit: answering a status request from the locomotive
+  markerBatteryWeak: boolean;
   bitsFixed: number; // bit errors corrected by the checksum (0 or 1)
 }
 
@@ -31,7 +37,8 @@ export function checkBits(data45: string): string {
   return reg.slice(-(GEN.length - 1)).map((b, i) => (b === KEY[i] ? '0' : '1')).join('');
 }
 
-const valid = (p: string) => checkBits(rev(p.slice(11, 56))) === p.slice(56, 74);
+// Chaining bits are 11 for a single-block message (the only kind an EOT sends).
+const valid = (p: string) => p.slice(11, 13) === '11' && checkBits(rev(p.slice(11, 56))) === p.slice(56, 74);
 
 function fields(p: string, bitsFixed: number): EotPacket {
   const num = (a: number, b: number) => parseInt(rev(p.slice(a, b)), 2);
@@ -45,6 +52,8 @@ function fields(p: string, bitsFixed: number): EotPacket {
     moving: p[53] === '1',
     markerLight: p[55] === '1',
     arming: p.slice(15, 18) === '111',
+    replying: p[51] === '1',
+    markerBatteryWeak: p[54] === '1',
     bitsFixed,
   };
 }
@@ -104,11 +113,76 @@ export function decodeEot(x: Int16Array, sr: number): EotPacket[] {
 export function describeEot(p: EotPacket): string {
   const parts = [
     `End-of-train device ${p.unit}`,
-    p.arming ? 'pairing with the locomotive' : undefined,
+    p.arming ? 'pairing with the locomotive' : p.replying ? 'answering the locomotive' : undefined,
     `brake pipe ${p.brakePsi} psi`,
     p.moving ? 'moving' : 'stopped',
     p.markerLight ? 'rear marker light on' : 'marker light off',
+    p.markerBatteryWeak ? 'marker light battery weak' : undefined,
     p.batteryCondition === 'Low' || p.batteryCondition === 'Very low' ? `battery ${p.batteryCondition.toLowerCase()}` : p.batteryPct !== undefined ? `battery ${p.batteryPct}%` : undefined,
   ].filter(Boolean);
   return `${parts.join(' · ')}.`;
 }
+
+// ---- head-of-train (locomotive → rear device) on 452.9375 MHz ----------------------------------------------------
+// Same modulation. Layout as described by RIT's "Detector-Station" senior project (from the ES protocol ICD): a 30-bit
+// sync (the last 6 bits of the bit sync + a 24-bit frame sync), then 64 bits: 5 bits, the 17-bit unit address of the
+// rear device being talked to, an 8-bit command, 33 BCH check bits (no cipher), and an odd-parity bit over all 64.
+// Written from that description; not yet confirmed on a real capture here.
+const HOT_SYNC = '010101100011110001000100101001';
+const HOT_GEN = '1110011011010111000010110011111011';
+const HOT_COMMANDS: Record<number, 'status request' | 'emergency brake'> = { 0b10101010: 'emergency brake', 0b01010101: 'status request' };
+
+export interface HotPacket {
+  unit: number; // the rear device it is addressing (matches EotPacket.unit)
+  command: 'status request' | 'emergency brake';
+}
+
+function mod2(dividend: string, gen: string): string {
+  const reg = [...dividend, ...'0'.repeat(gen.length - 1)];
+  for (let i = 0; i < dividend.length; i++) {
+    if (reg[i] !== '1') continue;
+    for (let j = 0; j < gen.length; j++) reg[i + j] = reg[i + j] === gen[j] ? '0' : '1';
+  }
+  return reg.slice(-(gen.length - 1)).join('');
+}
+
+/** Checks a 64-bit head-of-train block (after the frame sync); undefined unless BCH and parity both pass. */
+export function parseHot(block: string): HotPacket | undefined {
+  if (block.length < 64) return undefined;
+  const info = block.slice(0, 30);
+  if (mod2(rev(info), HOT_GEN) !== block.slice(30, 63)) return undefined;
+  if ([...block.slice(0, 64)].filter((b) => b === '1').length % 2 !== 1) return undefined;
+  const command = HOT_COMMANDS[parseInt(rev(block.slice(22, 30)), 2)];
+  if (!command) return undefined;
+  return { unit: parseInt(rev(block.slice(5, 22)), 2), command };
+}
+
+/** Builds a valid head-of-train block (for tests). */
+export function hotBlock(unit: number, command: HotPacket['command']): string {
+  const bits = (v: number, w: number) => [...Array(w)].map((_, i) => ((v >> i) & 1 ? '1' : '0')).join(''); // LSB first
+  const code = Number(Object.entries(HOT_COMMANDS).find(([, c]) => c === command)![0]);
+  const info = '00000' + bits(unit, 17) + bits(code, 8);
+  const body = info + mod2(rev(info), HOT_GEN);
+  return body + ([...body].filter((b) => b === '1').length % 2 === 0 ? '1' : '0');
+}
+
+/** Every distinct valid head-of-train packet in a recording. */
+export function decodeHot(x: Int16Array, sr: number): HotPacket[] {
+  const found = new Map<string, HotPacket>();
+  const spb = sr / BAUD;
+  for (let phase = 0; phase < spb; phase += 2) {
+    const bits = bitsAt(x, sr, phase);
+    for (let i = bits.indexOf(HOT_SYNC); i >= 0 && i + HOT_SYNC.length + 64 <= bits.length; i = bits.indexOf(HOT_SYNC, i + 1)) {
+      const h = parseHot(bits.slice(i + HOT_SYNC.length, i + HOT_SYNC.length + 64));
+      if (h) found.set(`${h.unit}:${h.command}`, h);
+    }
+  }
+  return [...found.values()];
+}
+
+export function describeHot(h: HotPacket): string {
+  return h.command === 'emergency brake'
+    ? `Locomotive sent an EMERGENCY BRAKE command to end-of-train device ${h.unit} (it vents the brake pipe from the rear).`
+    : `Locomotive asked end-of-train device ${h.unit} for a status update.`;
+}
+

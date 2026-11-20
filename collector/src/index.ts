@@ -1,7 +1,7 @@
 import { createServer, type ServerResponse } from 'node:http';
 import { createSocket } from 'node:dgram';
 import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs';
-import { copyFile, mkdir, readFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, unlink } from 'node:fs/promises';
 import { dirname, extname, join, normalize } from 'node:path';
 import { connect as mqttConnect } from 'mqtt';
 import type { Aircraft, AisFixed, Balloon, FeedItem, Overlays, Pin, PinMetric, RadioStation, SchedulerState, SensorInfo, SlotStat, Snapshot, SourceStatus, SpectrumHeat, Tracks, Vessel } from '../../shared/types.ts';
@@ -11,8 +11,8 @@ import { ClipWatcher, type Clip } from './clips.ts';
 import { parseSame } from './eas.ts';
 import { ingestSpectrum, purgeOldFiles, SPECTRUM_BINS } from './housekeeping.ts';
 import { ingestHdRadio } from './hdradio.ts';
-import { ingestTrains, loggedBursts, SAMPLE_RATE as TRAIN_RATE, type TrainBurst } from './trains.ts';
-import { decodeEot, describeEot } from './eot.ts';
+import { ingestTrains, SAMPLE_RATE as TRAIN_RATE, type TrainBurst } from './trains.ts';
+import { decodeEot, describeEot, describeHot } from './eot.ts';
 import { clipPeaks, wavSamples } from './peaks.ts';
 import { loadGroundStations } from './groundstations.ts';
 import { approxHome, randomOffset, type Offset } from './privacy.ts';
@@ -876,20 +876,19 @@ async function readTrain(file: string, ms?: number): Promise<{ title: string; bo
   return { title: 'Train passing', body: `A ${ms ? `${ms} ms ` : ''}data burst from a train's end-of-train device (the box on the last car that reports brake pressure), too noisy to decode.` };
 }
 
-/** Posts a burst to the feed; returns the end-of-train unit when it decoded. */
+/** Posts a burst to the feed (text only: decoded signals keep no audio); returns the end-of-train unit when it decoded. */
 async function postTrain(b: TrainBurst): Promise<number | undefined> {
-  let clip: string | undefined;
-  if (CLIPS_ROOT) {
-    try {
-      await mkdir(join(CLIPS_ROOT, 'trains'), { recursive: true });
-      await copyFile(join(TRAINS_DIR, 'review', b.file), join(CLIPS_ROOT, 'trains', b.file));
-      clip = `/api/clips/trains/${encodeURIComponent(b.file)}`;
-    } catch {
-      /* no clip: the card still shows */
-    }
+  logRaw('trains', 'burst', JSON.stringify(b), b.at);
+  const h = b.hot?.[0];
+  if (h) {
+    publishFeed({ ts: b.at, family: 'rail', kind: 'Train', title: `Locomotive · ${h.command === 'emergency brake' ? 'EMERGENCY' : 'status request'} to EOT ${h.unit}`, meta: '452.938', body: describeHot(h) });
+    return undefined;
   }
-  const t = await readTrain(b.file, b.ms);
-  publishFeed({ ts: b.at, family: 'rail', kind: 'Train', title: t.title, meta: '457.938', body: t.body, clip, peaks: await peaksOf(clip) });
+  const p = b.packets?.[0];
+  const t = p
+    ? { title: `Train passing · EOT ${p.unit}`, body: describeEot(p), unit: p.unit }
+    : { title: 'Train passing', body: `A ${b.ms} ms data burst from a train's end-of-train device (the box on the last car that reports brake pressure), too noisy to decode.`, unit: undefined };
+  publishFeed({ ts: b.at, family: 'rail', kind: 'Train', title: t.title, meta: '457.938', body: t.body });
   return t.unit;
 }
 // Cards posted before decoding existed: decode their clips once (the review folder keeps a week of them).
@@ -909,15 +908,17 @@ if (!store.getState('trainsDecoded')) {
     if (n) console.log(`trains: decoded ${n} earlier burst(s)`);
   })();
 }
-// Bursts caught before trains reached the feed: post them once.
-if (!store.getState('trainsBackfilled')) {
-  store.setState('trainsBackfilled', true);
-  void loggedBursts(TRAINS_DIR, Date.now() - 7 * 86_400_000).then(async (list) => {
-    for (const b of list) await postTrain(b);
-    if (list.length) console.log(`trains: backfilled ${list.length} burst(s) into the feed`);
-  });
+// Decoded, so the recordings go: no audio on train cards, no WAVs kept (once, after the decode above has read them).
+if (!store.getState('trainAudioDropped')) {
+  void (async () => {
+    while (!store.getState('trainsDecoded')) await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 30_000)); // let the one-off decode finish with the WAVs first
+    const cleared = store.clearClips('Train');
+    for (const f of await readdir(join(TRAINS_DIR, 'review')).catch(() => [] as string[])) if (f.endsWith('.wav')) await unlink(join(TRAINS_DIR, 'review', f)).catch(() => {});
+    store.setState('trainAudioDropped', true);
+    if (cleared) console.log(`trains: removed audio from ${cleared} train card(s)`);
+  })();
 }
-
 // ---- state that survives restarts: ships, buoys, home location ------------------------------------
 function saveState() {
   store.setState('lastHeard', Object.fromEntries(lastHeard));

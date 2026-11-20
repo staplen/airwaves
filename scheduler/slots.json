@@ -59,6 +59,15 @@
       "binds": ["/mnt/data/supervisor/share/airwaves/trains:/out"]
     },
     {
+      "id": "trains", "name": "Trains (locomotive)", "freqMhz": 452.9375, "minutes": 1, "everyLoops": 2,
+      "comment": "The locomotive's side of the end-of-train link (status requests, emergency brake commands). Night only, every other loop; the collector decodes these from the same folder.",
+      "windows": [{ "start": "20:00", "end": "24:00" }, { "start": "00:00", "end": "06:00" }],
+      "image": "ghcr.io/sdr-enthusiasts/docker-adsb-ultrafeeder:latest-build-845",
+      "entrypoint": ["rtl_fm"],
+      "cmd": ["-f", "452.9375M", "-M", "fm", "-s", "12k", "-g", "44.5", "/out/hot_${TS}.raw"],
+      "binds": ["/mnt/data/supervisor/share/airwaves/trains:/out"]
+    },
+    {
       "id": "noaa", "name": "NOAA", "freqMhz": 162.45, "minutes": 1,
       "image": "airwaves-noaa:local",
       "binds": ["/mnt/data/supervisor/media/airwaves/noaa:/out"],
