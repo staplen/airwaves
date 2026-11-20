@@ -42,9 +42,19 @@ export function useLive(): Live {
           if (closed) return;
           setSnapshot(snap);
           setFeed((f) => {
+            // Keep the existing objects for unchanged items, and the same array if nothing changed at all,
+            // so a poll that brings nothing new doesn't re-render the feed.
             const byId = new Map(f.map((x) => [x.id, x]));
-            for (const i of items) byId.set(i.id, i);
-            return trimPerKind([...byId.values()].sort(newestFirst));
+            let changed = false;
+            for (const i of items) {
+              const old = byId.get(i.id);
+              if (old && JSON.stringify(old) === JSON.stringify(i)) continue;
+              byId.set(i.id, i);
+              changed = true;
+            }
+            if (!changed) return f;
+            const next = trimPerKind([...byId.values()].sort(newestFirst));
+            return next.length === f.length && next.every((x, k) => x === f[k]) ? f : next;
           });
           setConnected(true);
         } catch {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Map as MlMap, Popup, setWorkerUrl, type GeoJSONSource, type MapLayerMouseEvent } from 'maplibre-gl';
 // MapLibre loads its worker relative to its own module, which breaks once bundled.
 // Let Vite bundle the worker (with its shared chunk) and hand MapLibre the URL.
@@ -254,7 +254,11 @@ function ringsFC(home: Home): FC {
   return { type: 'FeatureCollection', features };
 }
 
-export function MapView({ snapshot }: { snapshot?: Snapshot }) {
+// Pulses redraw the whole map, so they run at most this often, and only while the map is on screen and the tab visible.
+const PULSE_FRAME_MS = 1000 / 30;
+
+/** Memoised: re-renders when the snapshot changes, not on the app's once-a-second clock. */
+export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot }) {
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<MlMap>(null);
   const [ready, setReady] = useState(false);
@@ -264,16 +268,35 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
   const [tracks, setTracks] = useState<Tracks>();
   const [trails, setTrails] = useState(true);
   const approx = useRef(false);
+  const onScreen = useRef(true);
+
+  useEffect(() => {
+    const node = el.current;
+    if (!node) return;
+    const io = new IntersectionObserver((es) => (onScreen.current = es[es.length - 1].isIntersecting));
+    io.observe(node);
+    return () => io.disconnect();
+  }, []);
 
   useEffect(() => {
     const m = new MlMap({ container: el.current!, style: STYLE, center: [-77.03, 38.9], zoom: 8.6, attributionControl: { compact: true } });
     map.current = m;
     let pulse = 0;
-    // MapLibre opens the compact attribution ("ⓘ") by default, covering the map's corner.
-    // Start it collapsed; the button still opens it.
-    const collapseAttribution = () => m.getContainer().querySelector('.maplibregl-ctrl-attrib.maplibregl-compact-show')?.classList.remove('maplibregl-compact-show');
-    m.once('idle', collapseAttribution);
-    m.on('resize', collapseAttribution);
+    // MapLibre opens the compact attribution ("ⓘ") on load, and again whenever a source's attribution updates or the
+    // map resizes (always on narrow screens), covering the legends. Keep it closed unless the viewer taps the button.
+    const attrib = m.getContainer().querySelector<HTMLElement>('.maplibregl-ctrl-attrib');
+    let attribOpen = false;
+    const onAttribClick = (e: Event) => {
+      if ((e.target as HTMLElement).closest('.maplibregl-ctrl-attrib-button')) attribOpen = !attribOpen;
+    };
+    attrib?.addEventListener('click', onAttribClick, true);
+    const attribObserver = new MutationObserver(() => {
+      if (attrib && attrib.classList.contains('maplibregl-compact-show') !== attribOpen) attrib.classList.toggle('maplibregl-compact-show', attribOpen);
+    });
+    if (attrib) {
+      attrib.classList.remove('maplibregl-compact-show');
+      attribObserver.observe(attrib, { attributes: true, attributeFilter: ['class'] });
+    }
     // Hover a marker for its card (tap on touch screens): one shared popup, replaced as the pointer moves.
     const hover = new Popup({ closeButton: false, closeOnClick: false, className: 'nav-popup', offset: 10 });
     let shown: unknown;
@@ -427,7 +450,11 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
       setReady(true);
       // Subtle pulse on the listening dot: the halo grows and fades every 2.4 s.
       if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        let lastFrame = 0;
         const tick = (t: number) => {
+          pulse = requestAnimationFrame(tick);
+          if (!onScreen.current || document.hidden || t - lastFrame < PULSE_FRAME_MS) return;
+          lastFrame = t;
           const p = (t % 2400) / 2400;
           if (approx.current) {
             if (m.getLayer('home')) m.setPaintProperty('home', 'circle-opacity', 0.22 + 0.13 * Math.sin(p * 2 * Math.PI));
@@ -440,13 +467,14 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
             m.setPaintProperty('site-pulse', 'circle-radius', 5 + 13 * q);
             m.setPaintProperty('site-pulse', 'circle-opacity', 0.45 * (1 - q));
           }
-          pulse = requestAnimationFrame(tick);
         };
         pulse = requestAnimationFrame(tick);
       }
     });
     return () => {
       cancelAnimationFrame(pulse);
+      attribObserver.disconnect();
+      attrib?.removeEventListener('click', onAttribClick, true);
       m.remove();
     };
   }, []);
@@ -579,4 +607,4 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
         ))}
     </section>
   );
-}
+});

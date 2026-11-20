@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Family, FeedItem } from '../../../shared/types.ts';
 import { FAMILY_COLOR, FAMILY_LABEL } from '../bands.ts';
 import { BundleCard, bundleRows } from './Bundle.tsx';
@@ -63,7 +63,11 @@ type Opt = { key: string; title: string; kindLabel: string; family: Family; coun
 
 const FAMILY_ORDER: Family[] = ['air', 'bcast', 'wx', 'home', 'rail', 'sea'];
 
-export function Feed({ items }: { items: FeedItem[] }) {
+// Rows are built in pages as the viewer scrolls, so a phone doesn't lay out hundreds of cards it never shows.
+const PAGE = 30;
+
+/** Memoised: the app re-renders every second for its countdowns, the feed only when its items change. */
+export const Feed = memo(function Feed({ items }: { items: FeedItem[] }) {
   // Types are all shown to start; viewers untick the ones they don't want (remembered per browser).
   const [hidden, setHiddenState] = useState<string[]>(readHidden);
   const setHidden = (next: string[]) => {
@@ -80,10 +84,32 @@ export function Feed({ items }: { items: FeedItem[] }) {
   const [active, setActive] = useState(-1);
   const input = useRef<HTMLInputElement>(null);
   const root = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const more = useRef<HTMLDivElement>(null);
+  const [limit, setLimit] = useState(PAGE);
 
   const words = useMemo(() => query.trim().toLowerCase().split(/\s+/).filter(Boolean), [query]);
   const typeOk = (i: FeedItem) => !hidden.includes(subOf(i));
-  const shown = items.filter((i) => typeOk(i) && (words.length === 0 || words.every((w) => haystack(i).includes(w))));
+  const shown = useMemo(
+    () => items.filter((i) => typeOk(i) && (words.length === 0 || words.every((w) => haystack(i).includes(w)))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [items, hidden, words],
+  );
+  // Searching lists every match on its own; otherwise runs of a kind fold into collapsed cards.
+  const rows = useMemo(() => (words.length ? shown.map((i) => ({ key: `${i.kind}:${i.id}`, items: [i] })) : bundleRows(shown)), [shown, words]);
+  const hasMore = rows.length > limit;
+  // A new filter or search starts again from the first page.
+  useEffect(() => setLimit(PAGE), [hidden, words]);
+  // Next page when the end of the list comes near. The list scrolls itself on wide screens and with the page on phones.
+  useEffect(() => {
+    const el = more.current;
+    const box = list.current;
+    if (!el || !box) return;
+    const ownScroll = getComputedStyle(box).overflowY !== 'visible';
+    const io = new IntersectionObserver((es) => es.some((e) => e.isIntersecting) && setLimit((l) => l + PAGE), { root: ownScroll ? box : null, rootMargin: '0px 0px 800px 0px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore, limit]);
 
   const counts = useMemo(() => {
     const m = new Map<string, number>();
@@ -174,8 +200,8 @@ export function Feed({ items }: { items: FeedItem[] }) {
   const onNames = onTypes.map((t) => t.label);
   const menuOpen = open && !typesOpen && opts.length > 0;
 
-  const card = (i: FeedItem) => (
-      <article key={i.id} className="card catch">
+  const card = (i: FeedItem, key: string) => (
+      <article key={key} className="card catch">
         <div className="bar" style={{ background: FAMILY_COLOR[i.family] }} />
         {i.image && !i.clip && <img className="catch-art" src={i.image} alt="" loading="lazy" width={56} height={56} />}
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -199,7 +225,7 @@ export function Feed({ items }: { items: FeedItem[] }) {
           {i.clip && Date.now() - i.ts < CLIP_RETENTION_MS && (
             <div className="clip-row">
               {i.image && <img className="clip-art" src={i.image} alt="" loading="lazy" width={52} height={52} />}
-              <ClipPlayer src={i.clip} color={FAMILY_COLOR[i.family]} label={`${i.title} clip`} />
+              <ClipPlayer src={i.clip} color={FAMILY_COLOR[i.family]} label={`${i.title} clip`} peaks={i.peaks} />
             </div>
           )}
           {i.clip && Date.now() - i.ts >= CLIP_RETENTION_MS && <span className="muted" style={{ fontSize: 12 }}>Clip expired (audio is kept for 24 hours)</span>}
@@ -298,7 +324,7 @@ export function Feed({ items }: { items: FeedItem[] }) {
           </div>
         )}
       </div>
-      <div className="feed-list">
+      <div className="feed-list" ref={list}>
         {shown.length === 0 && (
           <div className="card empty">
             {!filtered
@@ -311,8 +337,13 @@ export function Feed({ items }: { items: FeedItem[] }) {
             {filtered && <button type="button" className="empty-clear" onClick={clearAll}>Show everything</button>}
           </div>
         )}
-        {bundleRows(shown).map((r) => (r.items.length === 1 ? card(r.items[0]) : <BundleCard key={r.key} items={r.items} />))}
+        {rows.slice(0, limit).map((r) => (r.items.length === 1 ? card(r.items[0], r.key) : <BundleCard key={r.key} items={r.items} renderItem={(i) => card(i, String(i.id))} />))}
+        {hasMore && (
+          <div ref={more} className="feed-more">
+            <button type="button" className="empty-clear" onClick={() => setLimit((l) => l + PAGE)}>Show more ({rows.length - limit} left)</button>
+          </div>
+        )}
       </div>
     </section>
   );
-}
+});
