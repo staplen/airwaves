@@ -232,6 +232,7 @@ button.ftoken { font: inherit; font-size: 12px; cursor: pointer; padding: 3px 10
 .nav-card { display: flex; flex-direction: column; gap: 4px; }
 .nav-card b { color: var(--text); font-size: 13px; }
 .nav-card .muted { font-size: 11px; }
+.nav-card .alert { color: #ff7a7a; font-weight: 600; }
 
 /* Loop band: one tile per slot; the one on air grows into a hero card */
 /* Brand and buttons live at the two ends of the loop band (no separate header row) */

@@ -8,7 +8,8 @@
       "entrypoint": ["readsb"],
       "cmd": ["--device-type", "rtlsdr", "--device", "0", "--gain", "49.6",
               "--lat", "${HOME_LAT}", "--lon", "${HOME_LON}",
-              "--write-json", "/out", "--write-json-every", "1", "--quiet"],
+              "--write-json", "/out", "--write-json-every", "1", "--quiet",
+              "--db-file=/usr/local/share/tar1090/aircraft.csv.gz", "--db-file-lt"],
       "binds": ["/mnt/data/supervisor/share/airwaves/readsb:/out"]
     },
     {

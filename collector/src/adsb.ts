@@ -49,8 +49,7 @@ export class AdsbSource {
       this.raw = d.aircraft;
       this.aircraft = d.aircraft
         .filter((a) => typeof a.seen === 'number' && (a.seen as number) < 60)
-        .map(toAircraft)
-        .map((a) => (a.distNm === undefined && this.home && a.lat !== undefined && a.lon !== undefined ? { ...a, distNm: distanceNm(this.home, a.lat, a.lon) } : a));
+        .map(toAircraft);
       // The counter resets whenever the readsb slot restarts, so any change (not just growth) means new data.
       if (d.messages > 0 && d.messages !== this.lastMessages && this.lastMessages >= 0) this.lastHeard = Date.now();
       this.lastMessages = d.messages;
@@ -71,29 +70,33 @@ function num(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 }
 
-function toAircraft(a: Record<string, unknown>): Aircraft {
-  const flight = typeof a.flight === 'string' ? a.flight.trim() || undefined : undefined;
+const text = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+/** "BOEING 737-800" → "Boeing 737-800" (the database shouts). */
+const titleCase = (s: string | undefined) => s?.toLowerCase().replace(/\b([a-z])/g, (c) => c.toUpperCase()).replace(/\b(Ii|Iii|Iv|Er|Lr|Xwb|Max|Neo)\b/g, (w) => w.toUpperCase());
+
+export function toAircraft(a: Record<string, unknown>): Aircraft {
+  const flight = text(a.flight);
+  const emergency = text(a.emergency);
+  const dbFlags = num(a.dbFlags) ?? 0;
   return {
     hex: String(a.hex),
     flight,
-    type: typeof a.t === 'string' ? a.t : undefined,
+    type: text(a.t),
+    reg: text(a.r),
+    typeDesc: titleCase(text(a.desc)),
+    owner: titleCase(text(a.ownOp)),
+    military: (dbFlags & 1) === 1 || undefined,
+    category: text(a.category),
+    squawk: text(a.squawk),
+    emergency: emergency && emergency !== 'none' ? emergency : undefined,
+    selAltFt: num(a.nav_altitude_mcp) ?? num(a.nav_altitude_fms),
     altBaro: a.alt_baro === 'ground' ? 'ground' : num(a.alt_baro),
     baroRate: num(a.baro_rate),
     gs: num(a.gs),
     track: num(a.track),
     lat: num(a.lat),
     lon: num(a.lon),
-    distNm: num(a.r_dst),
     rssi: num(a.rssi),
     seen: num(a.seen) ?? 0,
   };
-}
-
-/** Great-circle distance in nautical miles (readsb only computes it when given the receiver location). */
-export function distanceNm(home: Home, lat: number, lon: number): number {
-  const rad = Math.PI / 180;
-  const dLat = (lat - home.lat) * rad;
-  const dLon = (lon - home.lon) * rad;
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(home.lat * rad) * Math.cos(lat * rad) * Math.sin(dLon / 2) ** 2;
-  return 2 * 3440.065 * Math.asin(Math.sqrt(a));
 }

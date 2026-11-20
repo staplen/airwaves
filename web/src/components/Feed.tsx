@@ -11,7 +11,7 @@ const CLIP_RETENTION_MS = 24 * 3600_000; // matches the collector's audio purge
 // Filterable types: each family splits into types by feed item kind, plus a per-family
 // catch-all for kinds we don't know yet. Everything is shown until a viewer unticks types.
 const CATEGORIES: { family: Family; subs: { id: string; label: string; kinds: string[] }[] }[] = [
-  { family: 'air', subs: [{ id: 'atc', label: 'ATC', kinds: ['ATC'] }, { id: 'datalink', label: 'Datalink', kinds: ['Datalink'] }, { id: 'aircraft', label: 'Aircraft', kinds: ['Aircraft'] }] },
+  { family: 'air', subs: [{ id: 'atc', label: 'ATC', kinds: ['ATC'] }, { id: 'datalink', label: 'Datalink', kinds: ['Datalink'] }, { id: 'aircraft', label: 'Aircraft', kinds: ['Aircraft'] }, { id: 'emergency', label: 'Emergencies', kinds: ['Emergency'] }] },
   { family: 'sea', subs: [{ id: 'ships', label: 'Ships', kinds: ['Ship'] }] },
   { family: 'wx', subs: [{ id: 'radio', label: 'Weather radio', kinds: ['Weather'] }, { id: 'alerts', label: 'Weather alerts', kinds: ['Weather alert', 'Weather test'] }, { id: 'balloons', label: 'Balloons', kinds: ['Balloon'] }] },
   { family: 'bcast', subs: [{ id: 'radio-hd', label: 'HD Radio', kinds: ['Radio'] }] },

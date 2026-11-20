@@ -13,6 +13,7 @@ import { ingestSpectrum, purgeOldFiles, SPECTRUM_BINS } from './housekeeping.ts'
 import { ingestHdRadio } from './hdradio.ts';
 import { ingestTrains, loggedBursts, type TrainBurst } from './trains.ts';
 import { clipPeaks } from './peaks.ts';
+import { loadGroundStations } from './groundstations.ts';
 import { approxHome, randomOffset, type Offset } from './privacy.ts';
 import { readOverlays } from './overlays.ts';
 import { Publisher } from './publisher.ts';
@@ -22,7 +23,7 @@ import { RawTap, tryJson, vdl2Kind } from './rawtap.ts';
 import { RawLog } from './rawlog.ts';
 import { describeSensor, parseRtl433 } from './rtl433.ts';
 import { Store, localDay } from './store.ts';
-import { parseVdl2 } from './vdl2.ts';
+import { AcarsAssembler, parseVdl2 } from './vdl2.ts';
 
 // ---- configuration (environment variables) --------------------------------------------
 const env = process.env;
@@ -140,7 +141,6 @@ function snapshot(): Snapshot {
   const gapS = adsb.lastOk ? Math.max(0, (now - adsb.lastOk) / 1000) : 0;
   // No callsign on ADS-B? Use the flight number datalink reported for the same airframe (ICAO hex).
   const aircraft = adsb.aircraft.map((a) => ({ ...a, flight: a.flight ?? dlName(a.hex, now), seen: a.seen + gapS }));
-  const withPos = aircraft.filter((a) => a.distNm !== undefined);
   const rssis = aircraft.map((a) => a.rssi).filter((v): v is number => v !== undefined);
   const adsbExpected = !rot || scheduler?.current?.slotId === 'adsb';
   return {
@@ -181,7 +181,6 @@ function snapshot(): Snapshot {
       datalinkToday: store.countSightings(day, 'vdl2'),
     },
     stats: {
-      maxRangeNm: Math.max(0, ...withPos.map((a) => a.distNm ?? 0)),
       avgRssi: rssis.length ? rssis.reduce((a, b) => a + b, 0) / rssis.length : undefined,
     },
     sensors: [...sensors.values()].filter((x) => now - x.lastSeen < 86_400_000).sort((a, b) => (localDay(b.lastSeen) === day ? b.heardToday : 0) - (localDay(a.lastSeen) === day ? a.heardToday : 0) || b.lastSeen - a.lastSeen).slice(0, 40),
@@ -260,7 +259,7 @@ function slotStats(now: number, aircraft: Aircraft[]): Record<string, SlotStat> 
 let publicOffset: Offset | undefined; // set in loadState
 const DISTANCE_TEXT = /,?\s*(?:at\s+)?[\d.]+\s*nm\b/g;
 function publicSnapshot(s: Snapshot): Snapshot {
-  return { ...s, sensors: undefined, pinned: s.pinned?.map((p) => ({ ...p, key: '' })), home: s.home && publicOffset ? approxHome(s.home, publicOffset) : undefined, aircraft: s.aircraft.map((a) => ({ ...a, distNm: undefined })), stats: { ...s.stats, maxRangeNm: 0 } };
+  return { ...s, sensors: undefined, pinned: s.pinned?.map((p) => ({ ...p, key: '' })), home: s.home && publicOffset ? approxHome(s.home, publicOffset) : undefined, };
 }
 function publicItem(f: FeedItem): FeedItem {
   return f.kind === 'Aircraft' ? { ...f, body: f.body.replace(DISTANCE_TEXT, '') } : f;
@@ -306,13 +305,48 @@ function fmtAlt(a: Aircraft): string {
 
 function summarizeAircraft(now: number) {
   if (!adsb.lastOk || now - adsb.lastOk > 30_000 || adsb.aircraft.length === 0) return;
-  const placed = adsb.aircraft.filter((a) => a.distNm !== undefined).sort((x, y) => x.distNm! - y.distNm!);
-  const near = placed[0];
-  const far = placed[placed.length - 1];
-  const parts: string[] = [];
-  if (near) parts.push(`Closest ${near.flight ?? near.hex} at ${fmtAlt(near)}, ${near.distNm!.toFixed(1)} nm.`);
-  if (far && far !== near) parts.push(`Farthest ${far.flight ?? far.hex} at ${far.distNm!.toFixed(1)} nm.`);
-  publishFeed({ ts: now, family: 'air', kind: 'Aircraft', title: `${adsb.aircraft.length} aircraft in range`, meta: `1090`, body: parts.join(' ') || 'No positions yet.' });
+  publishFeed({ ts: now, family: 'air', kind: 'Aircraft', title: `${adsb.aircraft.length} aircraft in range`, meta: `1090`, body: aircraftHighlights(adsb.aircraft) });
+}
+
+// Bigger airframes first (emitter category A5 heavy … A1 light), then military, then by altitude.
+const CATEGORY_RANK: Record<string, number> = { A5: 5, A4: 4, A3: 3, A6: 3, A2: 2, A1: 1, A7: 1 };
+/** "Boeing 777-300ER UAL921 at FL370 · Airbus A321 AAL1877 at 12,000 ft · plus a military C-17." No distances (privacy). */
+function aircraftHighlights(list: Aircraft[]): string {
+  const named = list.filter((a) => a.typeDesc).sort((x, y) => (CATEGORY_RANK[y.category ?? ''] ?? 0) - (CATEGORY_RANK[x.category ?? ''] ?? 0) || Number(Boolean(y.military)) - Number(Boolean(x.military)) || (typeof y.altBaro === 'number' ? y.altBaro : 0) - (typeof x.altBaro === 'number' ? x.altBaro : 0));
+  const parts = named.slice(0, 3).map((a) => `${a.military ? 'Military ' : ''}${a.typeDesc} ${a.flight ?? a.reg ?? a.hex} at ${fmtAlt(a)}`);
+  const mil = named.slice(3).filter((a) => a.military).length;
+  if (mil) parts.push(`plus ${mil} more military`);
+  if (parts.length) return `${parts.join(' · ')}.`;
+  const placed = list.filter((a) => a.lat !== undefined).length;
+  return placed ? `${placed} with positions.` : 'No positions yet.';
+}
+
+// ---- emergencies: squawk 7500/7600/7700 or an ADS-B emergency status, confirmed on two polls a few seconds apart ----
+const EMERGENCY_SQUAWK: Record<string, string> = { '7500': 'unlawful interference (hijack code)', '7600': 'radio failure', '7700': 'general emergency' };
+const EMERGENCY_STATUS: Record<string, string> = { general: 'general emergency', lifeguard: 'medical (lifeguard) flight priority', minfuel: 'minimum fuel', nordo: 'radio failure', unlawful: 'unlawful interference', downed: 'downed aircraft' };
+const emergencySeen = new Map<string, { first: number; last: number; announced?: number }>();
+function checkEmergencies(now: number) {
+  for (const a of adsb.aircraft) {
+    const what = (a.squawk && EMERGENCY_SQUAWK[a.squawk]) || (a.emergency && (EMERGENCY_STATUS[a.emergency] ?? a.emergency));
+    if (!what || a.seen > 10) continue;
+    let e = emergencySeen.get(a.hex);
+    if (!e || now - e.last > 10_000) e = { first: now, last: now, announced: e?.announced }; // a one-off garbled squawk doesn't count
+    e.last = now;
+    emergencySeen.set(a.hex, e);
+    if (now - e.first < 4_000 || (e.announced && now - e.announced < 2 * 3600_000)) continue;
+    e.announced = now;
+    const name = a.flight ?? dlName(a.hex, now) ?? a.reg ?? a.hex;
+    const climb = a.baroRate && a.baroRate < -500 ? ', descending' : a.baroRate && a.baroRate > 500 ? ', climbing' : '';
+    publishFeed({
+      ts: now,
+      family: 'air',
+      kind: 'Emergency',
+      title: `${name} · ${a.squawk && EMERGENCY_SQUAWK[a.squawk] ? `squawking ${a.squawk}` : 'emergency'}`,
+      meta: '1090',
+      body: `${what.charAt(0).toUpperCase()}${what.slice(1)}. ${[a.typeDesc, `at ${fmtAlt(a)}${climb}`].filter(Boolean).join(' ')}.`,
+    });
+  }
+  for (const [hex, e] of emergencySeen) if (now - (e.announced ?? e.first) > 3 * 3600_000) emergencySeen.delete(hex);
 }
 
 function summarizeStreet(now: number) {
@@ -370,6 +404,7 @@ async function tick() {
       store.seeAircraft(day, a.hex, a.flight, a.type, now);
     }
   }
+  if (ok) checkEmergencies(now);
   maybeSummarizeAircraft(now);
   if (now - lastSummary >= SUMMARY_EVERY_MS) {
     lastSummary = now;
@@ -422,14 +457,20 @@ function announceShip(v: Vessel) {
 }
 
 // ---- VDL2 (dumpvdl2 sends JSON over UDP) -------------------------------------------------
+const acarsBlocks = new AcarsAssembler();
 function onVdl2(raw: string) {
   heard('vdl2');
   logRaw('vdl2', vdl2Kind(raw), raw);
+  for (const frame of acarsBlocks.push(raw)) onVdl2Frame(frame);
+}
+function onVdl2Frame(raw: string) {
   const c = parseVdl2(raw);
   if (!c) return;
   const key = c.flight ?? c.reg ?? c.title;
   if (c.hex && (c.flight || c.reg)) dlNames.set(c.hex, { name: (c.flight ?? c.reg)!, ts: c.ts });
-  if (c.lat !== undefined && c.lon !== undefined) tracks.add('dl', c.hex ? `air:${c.hex}` : `dl:${key}`, c.lon, c.lat, c.altFt, c.ts, c.flight ?? c.reg);
+  const trackKey = c.hex ? `air:${c.hex}` : `dl:${key}`;
+  for (const p of c.points ?? []) tracks.add('dl', trackKey, p.lon, p.lat, p.altFt, p.ts, c.flight ?? c.reg);
+  if (!c.points && c.lat !== undefined && c.lon !== undefined && !c.coarse) tracks.add('dl', c.hex ? `air:${c.hex}` : `dl:${key}`, c.lon, c.lat, c.altFt, c.ts, c.flight ?? c.reg);
   store.sight(localDay(c.ts), 'vdl2', key, c.ts);
   // At most one feed item per flight every 10 minutes, except controller datalink.
   const last = lastVdl2PerFlight.get(key) ?? 0;
@@ -545,6 +586,10 @@ function udp(port: number, onLine: (l: string) => void) {
 udp(AIS_UDP_PORT, onAisLine);
 udp(SONDE_UDP_PORT, onSonde);
 udp(VDL2_UDP_PORT, onVdl2);
+// VDL2 ground station names (downloaded and cached; re-checked daily, refreshed when a week old).
+const loadGs = () => loadGroundStations(join(DATA_DIR, 'ground-stations.json')).then((n) => n && console.log(`ground stations: ${n} known`));
+void loadGs();
+setInterval(() => void loadGs(), 86_400_000).unref();
 
 // ---- audio clips (ATC and weather radio) -----------------------------------------------------
 /** Local path of a clip URL ("/api/clips/<dir>/<file>"), for reading its waveform. */

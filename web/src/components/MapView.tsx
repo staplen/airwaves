@@ -36,6 +36,31 @@ function planeImage(): ImageData {
   return g.getImageData(0, 0, s, s);
 }
 
+/** Helicopter (emitter category A7): a small body under a two-blade rotor, drawn top-down. */
+function heliImage(): ImageData {
+  const s = 32;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d')!;
+  g.translate(s / 2, s / 2);
+  g.fillStyle = '#fff';
+  g.strokeStyle = '#fff';
+  g.beginPath();
+  g.ellipse(0, -1, 4, 6, 0, 0, Math.PI * 2);
+  g.fill();
+  g.fillRect(-1, 4, 2, 10); // tail boom
+  g.fillRect(-4, 12, 8, 2); // tail rotor
+  g.lineWidth = 2;
+  g.lineCap = 'round';
+  g.beginPath();
+  g.moveTo(-13, -10);
+  g.lineTo(13, 8);
+  g.moveTo(13, -10);
+  g.lineTo(-13, 8);
+  g.stroke();
+  return g.getImageData(0, 0, s, s);
+}
+
 function shipImage(): ImageData {
   const s = 24;
   const c = document.createElement('canvas');
@@ -232,9 +257,52 @@ function aircraftFC(list: Aircraft[]): FC {
       .map((a) => ({
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [a.lon!, a.lat!] },
-        properties: { label: a.flight ?? a.hex, alt: fmtAlt(a), track: a.track ?? 0, stale: a.seen > STALE_S },
+        properties: {
+          id: a.hex,
+          label: a.flight ?? a.reg ?? a.hex,
+          alt: fmtAlt(a),
+          track: a.track ?? 0,
+          stale: a.seen > STALE_S,
+          category: a.category ?? '',
+          heli: a.category === 'A7',
+          state: a.emergency || (a.squawk && EMERGENCY_SQUAWKS.has(a.squawk)) ? 'emergency' : a.military ? 'military' : 'normal',
+          info: JSON.stringify(a),
+        },
       })),
   };
+}
+
+const EMERGENCY_SQUAWKS = new Set(['7500', '7600', '7700']);
+const SQUAWK_MEANING: Record<string, string> = { '7500': 'hijack code', '7600': 'radio failure', '7700': 'emergency' };
+const CATEGORY: Record<string, string> = { A1: 'Light aircraft', A2: 'Small aircraft', A3: 'Large aircraft', A4: 'Large, high wake (757)', A5: 'Heavy aircraft', A6: 'High performance', A7: 'Helicopter', B1: 'Glider', B2: 'Balloon', B4: 'Ultralight', B6: 'Drone', C1: 'Airport emergency vehicle', C2: 'Airport service vehicle' };
+
+/** The aircraft's hover card: who and what it is, what it's doing, and how well we hear it. */
+function aircraftCard(a: Aircraft): HTMLElement {
+  const card = document.createElement('div');
+  card.className = 'nav-card';
+  const line = (text: string, cls?: string) => {
+    const d = document.createElement(cls === 'b' ? 'b' : 'div');
+    if (cls && cls !== 'b') d.className = cls;
+    d.textContent = text;
+    card.append(d);
+  };
+  line(a.flight ?? a.reg ?? a.hex.toUpperCase(), 'b');
+  const what = [a.typeDesc ?? (a.category ? CATEGORY[a.category] : undefined), a.military ? 'military' : undefined].filter(Boolean).join(' · ');
+  if (what) line(what);
+  const who = [a.reg && a.reg !== a.flight ? a.reg : undefined, a.owner].filter(Boolean).join(' · ');
+  if (who) line(who, 'muted');
+  if (a.altBaro !== undefined) {
+    const alt = a.altBaro === 'ground' ? 'On the ground' : a.altBaro >= 18000 ? `FL${Math.round(a.altBaro / 100)}` : `${a.altBaro.toLocaleString('en-US')} ft`;
+    const rate = a.baroRate && Math.abs(a.baroRate) >= 300 ? `, ${a.baroRate > 0 ? 'climbing' : 'descending'} ${Math.abs(Math.round(a.baroRate / 100) * 100).toLocaleString('en-US')} ft/min` : '';
+    const sel = a.selAltFt && typeof a.altBaro === 'number' && Math.abs(a.selAltFt - a.altBaro) > 250 ? ` → ${a.selAltFt >= 18000 ? `FL${Math.round(a.selAltFt / 100)}` : `${Math.round(a.selAltFt / 100) * 100} ft`}` : '';
+    line(`${alt}${rate}${sel}`);
+  }
+  const motion = [a.gs !== undefined ? `${Math.round(a.gs)} kt` : undefined, a.track !== undefined ? `heading ${Math.round(a.track)}°` : undefined].filter(Boolean).join(' · ');
+  if (motion) line(motion);
+  if (a.emergency || (a.squawk && EMERGENCY_SQUAWKS.has(a.squawk))) line(`Squawk ${a.squawk ?? '—'}: ${a.squawk && SQUAWK_MEANING[a.squawk] ? SQUAWK_MEANING[a.squawk] : a.emergency}`, 'alert');
+  else if (a.squawk) line(`Squawk ${a.squawk}`, 'muted');
+  line([a.rssi !== undefined ? `Signal ${Math.round(a.rssi)} dBFS` : undefined, `heard ${Math.round(a.seen)} s ago`].filter(Boolean).join(' · '), 'muted');
+  return card;
 }
 
 function ringsFC(home: Home): FC {
@@ -323,7 +391,7 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
     };
     // Touch screens never send mouseleave: a tap on empty map closes the card.
     m.on('click', (e) => {
-      const layers = ['aids', 'sites'].filter((l) => m.getLayer(l));
+      const layers = ['aids', 'sites', 'aircraft'].filter((l) => m.getLayer(l));
       if (!m.queryRenderedFeatures(e.point, { layers }).length) {
         hover.remove();
         shown = undefined;
@@ -331,6 +399,7 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
     });
     m.on('load', () => {
       m.addImage('plane', planeImage(), { sdf: true });
+      m.addImage('heli', heliImage(), { sdf: true });
       m.addImage('ship', shipImage(), { sdf: true });
       m.addSource('sea', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       m.addSource('rings', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
@@ -398,6 +467,11 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
         layout: { 'text-field': ['step', ['zoom'], ['get', 'label'], 9, ['get', 'name']], 'text-font': ['Noto Sans Regular'], 'text-size': 10, 'text-offset': [0, 0.9], 'text-anchor': 'top', 'text-optional': true },
         paint: { 'text-color': ['get', 'color'], 'text-opacity': ['case', ['get', 'on'], 1, 0.6], 'text-halo-color': '#0b0e13', 'text-halo-width': 1.2 },
       });
+      hoverCard('aircraft', '260px', (e) => {
+        const f = e.features?.[0];
+        if (!f || f.geometry.type !== 'Point') return undefined;
+        return { at: f.geometry.coordinates as [number, number], card: aircraftCard(JSON.parse(String(f.properties?.info)) as Aircraft) };
+      });
       hoverCard('sites', '260px', (e) => {
         const f = e.features?.[0];
         if (!f || f.geometry.type !== 'Point') return undefined;
@@ -425,8 +499,9 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
         type: 'symbol',
         source: 'aircraft',
         layout: {
-          'icon-image': 'plane',
-          'icon-size': 0.8,
+          'icon-image': ['case', ['get', 'heli'], 'heli', 'plane'],
+          // Size by emitter category: light aircraft small, heavies big.
+          'icon-size': ['match', ['get', 'category'], 'A1', 0.6, 'A2', 0.7, 'A3', 0.8, 'A4', 0.9, 'A5', 1.0, 'A6', 0.75, 'A7', 0.75, 0.75],
           'icon-rotate': ['get', 'track'],
           'icon-rotation-alignment': 'map',
           'icon-allow-overlap': true,
@@ -439,7 +514,7 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
           'text-optional': true,
         },
         paint: {
-          'icon-color': '#5ab0ff',
+          'icon-color': ['match', ['get', 'state'], 'emergency', '#ff5a5a', 'military', '#d8c66a', '#5ab0ff'],
           'icon-opacity': ['case', ['get', 'stale'], 0.35, 1],
           'text-color': '#e6e9ee',
           'text-opacity': ['case', ['get', 'stale'], 0.45, 1],
@@ -577,7 +652,7 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
           )}
           <div className="overlay-b">
             <div className="tog" style={{ gap: 16 }}>
-              <span><b className="mono">{snapshot ? snapshot.stats.maxRangeNm.toFixed(0) : '—'}</b> <span className="muted">nm range</span></span>
+              <span><b className="mono">{snapshot ? snapshot.aircraft.length : '—'}</b> <span className="muted">aircraft</span></span>
               <span><b className="mono">{snapshot?.stats.avgRssi?.toFixed(0) ?? '—'}</b> <span className="muted">dBFS</span></span>
             </div>
             <button type="button" className="tog" aria-pressed={trails} onClick={() => setTrails((v) => !v)} style={{ fontSize: 11 }}>

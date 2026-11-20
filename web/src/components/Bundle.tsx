@@ -22,6 +22,7 @@ const RULES: Record<string, Rule> = {
   Street: { ...PER_HOUR, noun: ['update', 'updates'] },
   Home: { ...PER_HOUR, noun: ['reading', 'readings'] },
   Balloon: { gap: 30 * MIN, span: 120 * MIN, noun: ['update', 'updates'] },
+  Emergency: { gap: -1, span: -1, noun: ['alert', 'alerts'] }, // never folded: each one matters
 };
 const DEFAULT_RULE: Rule = { ...PER_LOOP, noun: ['item', 'items'] };
 const ruleOf = (kind: string) => RULES[kind] ?? DEFAULT_RULE;

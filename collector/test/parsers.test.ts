@@ -62,13 +62,16 @@ test('VDL2 XID handoff mentions destination', () => {
       avlc: {
         src: { addr: 'A22358', type: 'Aircraft' },
         dst: { addr: '11108A', type: 'Ground station' },
-        xid: { vdl_params: [{ name: 'dst_airport', value: 'KBOS' }, { name: 'ac_location', value: { loc: { lat: 38.0, lon: -76.9 }, alt: 35000 } }] },
+        xid: { type: 'XID_CMD_HO', type_descr: 'Handoff Request', vdl_params: [{ name: 'dst_airport', value: 'KBOS' }, { name: 'ac_location', value: { loc: { lat: 38.0, lon: -76.9 }, alt: 35000 } }] },
       },
     },
   });
   const c = parseVdl2(raw);
   assert.ok(c);
   assert.match(c.body, /Boston/);
+  assert.match(c.title, /handoff request$/);
+  assert.match(c.body, /^Asked to switch to ground station 11108A\. Bound for Boston/);
+  assert.equal(c.raw, 'Handoff Request · ground station 11108A');
   assert.equal(c.altFt, 35000);
   assert.equal(c.hex, 'a22358'); // joins to the ADS-B aircraft with the same ICAO address
   near(c.freqMhz, 136.975, 0.0001);
@@ -203,4 +206,37 @@ test('airport names: short names for majors, city + state from the bundled list'
   assert.equal(airport('KBOS'), 'Boston (KBOS)');
   assert.equal(airport('KJNX'), 'Smithfield, NC (KJNX)');
   assert.equal(airport('ZZZZ'), 'ZZZZ');
+});
+
+test('VDL2 check-in names the ground station when the list knows it', async () => {
+  const { setGroundStations, parseGroundStations } = await import('../src/groundstations.ts');
+  setGroundStations(parseGroundStations(JSON.stringify({ ground_stations: [{ id: '11204A', airport: { icao: 'KBWI', city: 'Baltimore (MD)', name: 'BWI', latitude: '39.175N', longitude: '76.668W' } }] })));
+  const raw = JSON.stringify({
+    vdl2: { t: { sec: 1 }, freq: 136975000, avlc: { src: { addr: 'A240DC', type: 'Aircraft' }, dst: { addr: '11204A', type: 'Ground station' }, xid: { type: 'XID_CMD_LE', type_descr: 'Link Establishment', vdl_params: [{ name: 'dst_airport', value: 'KBOS' }] } } },
+  });
+  const c = parseVdl2(raw)!;
+  assert.match(c.title, /logged on$/);
+  assert.match(c.body, /^Logged on to datalink via the Baltimore, MD ground station \(KBWI\)\./);
+  setGroundStations(new Map());
+});
+
+test('CPDLC connect and disconnect name the ATC datalink service', () => {
+  const frame = (msgType: string) =>
+    JSON.stringify({ vdl2: { t: { sec: 1 }, freq: 136975000, avlc: { src: { addr: 'A1B2C3', type: 'Aircraft' }, dst: { addr: '11204A', type: 'Ground station' }, acars: { flight: 'WN1662', reg: '.N244WN', label: 'H1', msg_text: 'USADCXA.DR1.N244WN3559', arinc622: { msg_type: msgType, gs_addr: 'USADCXA', cpdlc: { err: false } } } } } });
+  assert.match(parseVdl2(frame('fans1a_cpdlc_disconnect_request'))!.body, /^Ended its controller–pilot text link with FAA Data Comm\./);
+  assert.match(parseVdl2(frame('fans1a_cpdlc_connect_confirm'))!.body, /^Connected to FAA Data Comm/);
+});
+
+test('multi-block ACARS messages are joined before translating', async () => {
+  const { AcarsAssembler } = await import('../src/vdl2.ts');
+  const block = (seq: string, more: boolean, text: string) =>
+    JSON.stringify({ vdl2: { t: { sec: 1 }, freq: 136975000, avlc: { src: { addr: 'ABADC0', type: 'Aircraft' }, dst: { addr: '11204A', type: 'Ground station' }, acars: { flight: 'WN1004', reg: '.N123WN', label: 'H1', msg_num: 'D49', msg_num_seq: seq, more, msg_text: text } } } });
+  const a = new AcarsAssembler();
+  assert.deepEqual(a.push(block('A', true, '++76502,XXX,B737-800,261120,WN1004,KLAX,KBWI,2656,SW2501\r\n6\r\n'), 1000), []);
+  const out = a.push(block('B', false, 'N3840.0,W07725.7,201756,17754,-14.0,009,023,DC,00000,0,\r\n'), 2000);
+  assert.equal(out.length, 1);
+  const c = parseVdl2(out[0])!;
+  assert.match(c.body, /Los Angeles \(KLAX\) → Baltimore \(KBWI\)/);
+  assert.equal(c.points?.length, 1);
+  assert.equal(c.points?.[0].altFt, 17754);
 });

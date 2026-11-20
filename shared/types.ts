@@ -18,9 +18,18 @@ export interface Aircraft {
   track?: number;
   lat?: number;
   lon?: number;
-  distNm?: number;
   rssi?: number;
   seen: number; // seconds since last message
+  // From readsb's aircraft database (tar1090-db), when the airframe is in it:
+  reg?: string; // registration, e.g. N876DN
+  typeDesc?: string; // long type name, e.g. "BOEING 737-800"
+  owner?: string; // registered owner / operator
+  military?: boolean;
+  // From the aircraft itself:
+  category?: string; // emitter category: A1 light … A5 heavy, A7 rotorcraft, …
+  squawk?: string;
+  emergency?: string; // readsb's emergency state when not "none" (general, lifeguard, minfuel, nordo, unlawful, downed)
+  selAltFt?: number; // altitude the crew has selected on the autopilot
 }
 
 export interface Vessel {
@@ -169,7 +178,7 @@ export interface Snapshot {
   atcHeard?: Record<string, number>;
   radio: RadioStation[];
   totals: Totals;
-  stats: { maxRangeNm: number; avgRssi?: number };
+  stats: { avgRssi?: number };
   publishedAt?: number; // epoch ms the public copy was uploaded (static site only)
   sensors?: SensorInfo[]; // recent 315/433 MHz sensors, most-heard first (local view only)
   pinned?: PinnedStat[]; // sensor readings pinned to the top stats
