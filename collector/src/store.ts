@@ -59,13 +59,23 @@ export class Store {
     if (!cols.includes('raw')) this.db.exec('ALTER TABLE feed ADD COLUMN raw TEXT');
     if (!cols.includes('image')) this.db.exec('ALTER TABLE feed ADD COLUMN image TEXT');
     if (!cols.includes('tag')) this.db.exec('ALTER TABLE feed ADD COLUMN tag TEXT');
+    if (!cols.includes('peaks')) this.db.exec('ALTER TABLE feed ADD COLUMN peaks TEXT');
   }
 
   addFeed(item: Omit<FeedItem, 'id'>): FeedItem {
     const r = this.db
-      .prepare('INSERT INTO feed (ts, family, kind, title, meta, body, mono, clip, raw, image, tag) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(item.ts, item.family, item.kind, item.title, item.meta, item.body, item.mono ? 1 : 0, item.clip ?? null, item.raw ?? null, item.image ?? null, item.tag ?? null);
+      .prepare('INSERT INTO feed (ts, family, kind, title, meta, body, mono, clip, raw, image, tag, peaks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(item.ts, item.family, item.kind, item.title, item.meta, item.body, item.mono ? 1 : 0, item.clip ?? null, item.raw ?? null, item.image ?? null, item.tag ?? null, item.peaks ?? null);
     return { ...item, id: Number(r.lastInsertRowid) };
+  }
+
+  /** Feed items since `sinceTs` that have a clip but no waveform yet (for the one-off backfill). */
+  clipsWithoutPeaks(sinceTs: number): { id: number; clip: string }[] {
+    return this.db.prepare('SELECT id, clip FROM feed WHERE ts >= ? AND clip IS NOT NULL AND peaks IS NULL ORDER BY ts DESC').all(sinceTs) as { id: number; clip: string }[];
+  }
+
+  setPeaks(id: number, peaks: string) {
+    this.db.prepare('UPDATE feed SET peaks = ? WHERE id = ?').run(peaks, id);
   }
 
   recentFeed(limit = 50): FeedItem[] {
@@ -216,5 +226,6 @@ function toItem(r: Record<string, unknown>): FeedItem {
     image: typeof r.image === 'string' ? r.image : undefined,
     raw: typeof r.raw === 'string' ? r.raw : undefined,
     tag: typeof r.tag === 'string' ? r.tag : undefined,
+    peaks: typeof r.peaks === 'string' ? r.peaks : undefined,
   };
 }

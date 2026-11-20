@@ -39,9 +39,9 @@ docker run --rm -v "$HOST_APP:/app" -w /app node:26-alpine \
   sh -c "npm ci --no-audit --no-fund --loglevel=error && npm run build -w web --silent && npm prune --omit=dev --no-audit --no-fund --loglevel=error" >/dev/null
 echo "   done"
 
-# Rebuild a local decoder image only when its folder changed since the last build.
+# Rebuild a local image (decoders, and the collector's Node + ffmpeg runtime) only when its folder changed since the last build.
 mkdir -p "$STAMPS"
-for img in noaa hdradio; do
+for img in noaa hdradio collector; do
   tree=$(git -C "$APP" rev-parse "HEAD:deploy/$img")
   if [ "$(cat "$STAMPS/$img" 2>/dev/null)" != "$tree" ] || ! docker image inspect "airwaves-$img:local" >/dev/null 2>&1; then
     echo "== building airwaves-$img:local (this can take a few minutes)"
@@ -60,7 +60,7 @@ docker rm -f airwaves-collector airwaves-scheduler >/dev/null 2>&1 || true
 docker run -d --name airwaves-collector --restart unless-stopped --network host --env-file "$ENVFILE" \
   -e PORT=8090 -e ADSB_URL=http://127.0.0.1:8080/data -e CLIPS_ROOT=/clips \
   -e DATA_DIR=/airwaves/data -e WEB_DIR=/airwaves/app/web/dist \
-  -v "$SHARE:/airwaves" -v "$MEDIA:/clips" -w /airwaves/app node:26-alpine \
+  -v "$SHARE:/airwaves" -v "$MEDIA:/clips" -w /airwaves/app airwaves-collector:local \
   node collector/src/index.ts >/dev/null
 docker run -d --name airwaves-scheduler --restart unless-stopped --network host --env-file "$ENVFILE" \
   -v /var/run/docker.sock:/var/run/docker.sock -v "$SHARE:/airwaves" -w /airwaves/app node:26-alpine \

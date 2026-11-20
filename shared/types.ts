@@ -126,6 +126,7 @@ export interface FeedItem {
   raw?: string; // original decoded text, when the body is a translation
   image?: string; // e.g. HD Radio album art URL
   tag?: string; // short caveat shown before the body, e.g. "Station message"
+  peaks?: string; // clip waveform: one character per bar, 0–63 (see collector/src/peaks.ts)
 }
 
 /** An HD Radio station seen by the sweep, with what it was last playing. */

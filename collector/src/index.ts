@@ -12,6 +12,7 @@ import { parseSame } from './eas.ts';
 import { ingestSpectrum, purgeOldFiles, SPECTRUM_BINS } from './housekeeping.ts';
 import { ingestHdRadio } from './hdradio.ts';
 import { ingestTrains, loggedBursts, type TrainBurst } from './trains.ts';
+import { clipPeaks } from './peaks.ts';
 import { approxHome, randomOffset, type Offset } from './privacy.ts';
 import { readOverlays } from './overlays.ts';
 import { Publisher } from './publisher.ts';
@@ -546,20 +547,43 @@ udp(SONDE_UDP_PORT, onSonde);
 udp(VDL2_UDP_PORT, onVdl2);
 
 // ---- audio clips (ATC and weather radio) -----------------------------------------------------
-function onClip(c: Clip) {
+/** Local path of a clip URL ("/api/clips/<dir>/<file>"), for reading its waveform. */
+function clipPath(url: string): string | undefined {
+  const m = /^\/api\/clips\/([a-z]+)\/([^/]+)$/.exec(url);
+  return CLIPS_ROOT && m ? join(CLIPS_ROOT, m[1], decodeURIComponent(m[2])) : undefined;
+}
+const peaksOf = async (url: string | undefined) => {
+  const p = url && clipPath(url);
+  return p ? clipPeaks(p) : undefined;
+};
+
+async function onClip(c: Clip) {
   const url = `/api/clips/${c.dir}/${encodeURIComponent(c.file)}`;
+  const peaks = await peaksOf(url);
   if (c.dir === 'atc') {
     heard('atc', c.ts);
     store.sight(localDay(c.ts), 'atc', c.file, c.ts);
     atcHeard.set(c.template, Math.max(atcHeard.get(c.template) ?? 0, c.ts));
     const ch = ATC_NAMES[c.template] ?? { name: c.template.replace(/_/g, ' '), freq: '' };
-    publishFeed({ ts: c.ts, family: 'air', kind: 'ATC', title: ch.name, meta: `${ch.freq}`, body: '', clip: url });
+    publishFeed({ ts: c.ts, family: 'air', kind: 'ATC', title: ch.name, meta: `${ch.freq}`, body: '', clip: url, peaks });
   } else if (c.dir === 'noaa') {
     heard('noaa', c.ts);
-    publishFeed({ ts: c.ts, family: 'wx', kind: 'Weather', title: 'NOAA Weather Radio', meta: `162.450`, body: '', clip: url });
+    publishFeed({ ts: c.ts, family: 'wx', kind: 'Weather', title: 'NOAA Weather Radio', meta: `162.450`, body: '', clip: url, peaks });
   }
 }
-if (CLIPS_ROOT) new ClipWatcher({ atc: join(CLIPS_ROOT, 'atc'), noaa: join(CLIPS_ROOT, 'noaa') }, onClip).start();
+if (CLIPS_ROOT) new ClipWatcher({ atc: join(CLIPS_ROOT, 'atc'), noaa: join(CLIPS_ROOT, 'noaa') }, (c) => void onClip(c)).start();
+// Clips filed before waveforms existed (or while ffmpeg was missing): fill them in once, in the background.
+void (async () => {
+  let n = 0;
+  for (const r of store.clipsWithoutPeaks(Date.now() - 24 * 3600_000)) {
+    const peaks = await peaksOf(r.clip);
+    if (peaks) {
+      store.setPeaks(r.id, peaks);
+      n++;
+    }
+  }
+  if (n) console.log(`peaks: backfilled ${n} clip waveform(s)`);
+})();
 
 function currentOverlays(): Overlays {
   try {
@@ -762,7 +786,7 @@ async function ingestFiles() {
     // Post to the feed on a song change, or the first time we see a station today.
     if (titleChanged || !prev || localDay(prev.updatedAt) !== localDay(c.ts)) {
       const playing = c.title ? `${c.title}${c.artist ? ` — ${c.artist}` : ''}` : c.slogan ?? 'No song information';
-      publishFeed({ ts: c.ts, family: 'bcast', kind: 'Radio', title: `${st.name ?? `${c.freq} FM`} HD${c.program + 1}`, meta: c.freq, body: playing, image: art ?? st.logo, clip, tag: radioTag(c) });
+      publishFeed({ ts: c.ts, family: 'bcast', kind: 'Radio', title: `${st.name ?? `${c.freq} FM`} HD${c.program + 1}`, meta: c.freq, body: playing, image: art ?? st.logo, clip, tag: radioTag(c), peaks: await peaksOf(clip) });
     }
   }
 }
@@ -787,7 +811,7 @@ async function postTrain(b: TrainBurst) {
       /* no clip: the card still shows */
     }
   }
-  publishFeed({ ts: b.at, family: 'rail', kind: 'Train', title: 'Train passing', meta: '457.938', body: `A ${b.ms} ms data burst from a train's end-of-train device (the box on the last car that reports brake pressure). Not decoded yet.`, clip });
+  publishFeed({ ts: b.at, family: 'rail', kind: 'Train', title: 'Train passing', meta: '457.938', body: `A ${b.ms} ms data burst from a train's end-of-train device (the box on the last car that reports brake pressure). Not decoded yet.`, clip, peaks: await peaksOf(clip) });
 }
 // Bursts caught before trains reached the feed: post them once.
 if (!store.getState('trainsBackfilled')) {
