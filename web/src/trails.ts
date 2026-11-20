@@ -2,7 +2,7 @@ import type { Tracks } from '../../shared/types.ts';
 
 // Contrails: recent positions as short line segments that fade with age. Points from separate passes
 // aren't joined (ADS-B listens ~30 s every ~12 min), except sparse datalink reports, which are.
-const JOIN_GAP_S: Record<string, number> = { air: 120, dl: 30 * 60, sea: 30 * 60 };
+const JOIN_GAP_S: Record<string, number> = { air: 120, dl: 30 * 60, sea: 30 * 60, ham: 30 * 60 };
 
 export function tracksFC(t: Tracks | undefined, nowMs = Date.now()): GeoJSON.FeatureCollection {
   const features: GeoJSON.Feature[] = [];
@@ -18,11 +18,11 @@ export function tracksFC(t: Tracks | undefined, nowMs = Date.now()): GeoJSON.Fea
         features.push({
           type: 'Feature',
           geometry: { type: 'LineString', coordinates: [[p[0], p[1]], [q[0], q[1]]] },
-          properties: { kind: tr.kind, alt: q[2] ?? p[2] ?? -1, age: Math.max(0, (now - q[3]) / 60) },
+          properties: { id: tr.id, kind: tr.kind, alt: q[2] ?? p[2] ?? -1, age: Math.max(0, (now - q[3]) / 60), t: q[3] },
         });
       } else if (!prevJoined) {
         // A lone point (one report in a pass): a dot instead of a line.
-        features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [p[0], p[1]] }, properties: { kind: tr.kind, alt: p[2] ?? -1, age: Math.max(0, (now - p[3]) / 60) } });
+        features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [p[0], p[1]] }, properties: { id: tr.id, kind: tr.kind, alt: p[2] ?? -1, age: Math.max(0, (now - p[3]) / 60), t: p[3] } });
       }
     }
   }
@@ -40,5 +40,7 @@ export const TRAIL_COLOR = [
   '#c084fc',
   'sea',
   '#3cc9b4',
+  'ham',
+  '#9be35a',
   ['case', ['<', ['get', 'alt'], 0], '#8b93a1', ['interpolate', ['linear'], ['get', 'alt'], 0, '#ffb46b', 8000, '#f7e27a', 18000, '#5ab0ff', 36000, '#8f7cff']],
 ] as const;

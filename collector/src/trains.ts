@@ -1,6 +1,6 @@
 import { appendFile, mkdir, readdir, readFile, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { decodeEot, decodeHot, type EotPacket, type HotPacket } from './eot.ts';
+import { decodeEot, decodeHot, hasDpuSync, type EotPacket, type HotPacket } from './eot.ts';
 
 // Train probe. Short scheduler slots run rtl_fm on the end-of-train frequency (457.9375 MHz) and, at night, the
 // locomotive's (452.9375 MHz), writing raw audio: 16-bit mono, 12 kHz. End-of-train devices send short
@@ -93,6 +93,7 @@ export interface TrainBurst {
   score: number;
   packets?: EotPacket[]; // decoded end-of-train packets (empty: too noisy)
   hot?: HotPacket[]; // locomotive commands, when the burst came from the head-of-train side
+  dpu?: boolean; // beta: carries the distributed-power sync pattern (not decoded)
 }
 
 /** Processes finished recordings in `dir`; returns the bursts kept. */
@@ -124,7 +125,8 @@ export async function ingestTrains(dir: string): Promise<TrainBurst[]> {
         const audio = x.slice(a, z);
         const packets = decodeEot(audio, SAMPLE_RATE);
         const hot = packets.length ? [] : decodeHot(audio, SAMPLE_RATE);
-        const burst = { at: at.getTime(), file: name.replace(/\.wav$/, ''), ms: Math.round((b.endS - b.startS) * 1000), score: Number(b.score.toFixed(2)), packets, hot };
+        const dpu = !packets.length && !hot.length && hasDpuSync(audio, SAMPLE_RATE);
+        const burst = { at: at.getTime(), file: name.replace(/\.wav$/, ''), ms: Math.round((b.endS - b.startS) * 1000), score: Number(b.score.toFixed(2)), packets, hot, dpu };
         lines.push({ type: 'burst', ...burst, at: at.toISOString() });
         kept.push(burst);
       }

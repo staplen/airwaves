@@ -29,7 +29,7 @@ fi
 echo "   now at $(git -C "$APP" log --oneline -1)"
 
 mkdir -p /share/airwaves/data /share/airwaves/spectrum /share/airwaves/readsb /share/airwaves/hdradio/aas \
-  /share/airwaves/sonde/log /media/airwaves/atc /media/airwaves/noaa /media/airwaves/radio
+  /share/airwaves/sonde/log /share/airwaves/aprs /share/airwaves/trains /media/airwaves/atc /media/airwaves/noaa /media/airwaves/radio /media/airwaves/rail
 [ -f /share/airwaves/sonde/station.cfg ] || cp "$APP/deploy/sonde/station.cfg" /share/airwaves/sonde/station.cfg
 
 echo "== installing packages and building the dashboard"

@@ -106,6 +106,45 @@
       "env": ["HD_STATIONS=98.7:0 99.5:0 101.1:0", "HD_SNIPPET_SEC=12", "HD_SWEEP_MAX_SEC=20", "HD_DWELL_SEC=180"]
     },
     {
+      "id": "uat", "name": "UAT", "freqMhz": 978, "minutes": 1,
+      "comment": "978 MHz UAT: small planes that don't use 1090 (to the map), and FIS-B ground stations (positions; the broadcasts are logged raw for now).",
+      "image": "ghcr.io/sdr-enthusiasts/docker-dump978:latest-build-816",
+      "entrypoint": ["dump978-fa"],
+      "cmd": ["--sdr", "driver=rtlsdr", "--sdr-gain", "49.6", "--json-port", "30979", "--raw-port", "30978"]
+    },
+    {
+      "id": "aprs", "name": "APRS", "freqMhz": 144.39, "minutes": 1,
+      "comment": "Amateur APRS on 144.390 MHz: stations, weather stations and digipeaters with positions. Lines are written to a file the collector reads.",
+      "image": "airwaves-noaa:local",
+      "entrypoint": ["sh", "-c"],
+      "cmd": ["rtl_fm -f 144.39M -M fm -s 22050 -g 44.5 - | stdbuf -oL multimon-ng -t raw -a AFSK1200 -A - > /out/aprs_${TS}.log"],
+      "binds": ["/mnt/data/supervisor/share/airwaves/aprs:/out"]
+    },
+    {
+      "id": "acars", "name": "ACARS", "freqMhz": 130.8, "minutes": 1,
+      "comment": "Plain VHF ACARS (130.025, 130.450, 131.125, 131.550 MHz), alongside VDL2 datalink.",
+      "image": "ghcr.io/sdr-enthusiasts/docker-acarsdec:latest-build-518",
+      "entrypoint": ["acarsdec"],
+      "cmd": ["--output", "json:udp:host=127.0.0.1,port=5551", "-g", "49.6", "--rtlsdr", "0", "130.025", "130.450", "131.125", "131.550"]
+    },
+    {
+      "id": "rail", "name": "Rail radio (beta)", "freqMhz": 160.6875, "minutes": 1, "beta": true,
+      "comment": "BETA: every channel of the railroad voice band recorded to /media/airwaves/rail (24 h), counted but not posted, until we know what's used here.",
+      "image": "ghcr.io/rtl-airband/rtlsdr-airband:v7.0.1",
+      "binds": [
+        "/mnt/data/supervisor/share/airwaves/app/deploy/rail/rtl_airband.conf:/app/rtl_airband.conf:ro",
+        "/mnt/data/supervisor/media/airwaves/rail:/recordings"
+      ]
+    },
+    {
+      "id": "survey", "name": "Survey (beta)", "freqMhz": 500, "minutes": 2.5, "everyMinutes": 360, "runsOnce": true, "beta": true,
+      "comment": "BETA: fine sweeps (12.5 kHz, 20 s max-hold each) of 128-175, 216-226, 440-470 and 896-960 MHz every 6 hours, to find what else is on the air (/api/survey). Not decoded.",
+      "image": "ghcr.io/sdr-enthusiasts/docker-adsb-ultrafeeder:latest-build-845",
+      "entrypoint": ["sh", "-c"],
+      "cmd": ["for b in 128M:175M:12.5k 216M:226M:12.5k 440M:470M:12.5k 896M:960M:12.5k; do rtl_power -f $b -g 44.5 -i 1 -e 20 /out/survey_${TS}_${b%%:*}.csv; done"],
+      "binds": ["/mnt/data/supervisor/share/airwaves/spectrum:/out"]
+    },
+    {
       "id": "spectrum", "name": "Spectrum", "freqMhz": 500, "minutes": 1, "everyMinutes": 60,
       "runsOnce": true,
       "image": "ghcr.io/sdr-enthusiasts/docker-adsb-ultrafeeder:latest-build-845",

@@ -4,7 +4,7 @@ import { Map as MlMap, Popup, setWorkerUrl, type GeoJSONSource, type MapLayerMou
 // Let Vite bundle the worker (with its shared chunk) and hand MapLibre the URL.
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { Aircraft, AisFixed, Balloon, Home, Overlays, Snapshot, Tracks, Vessel } from '../../../shared/types.ts';
+import type { Aircraft, AisFixed, AprsStation, Balloon, Home, Overlays, Snapshot, Tracks, UatStation, Vessel } from '../../../shared/types.ts';
 import { apiUrl, isStatic } from '../api.ts';
 import { ago } from '../live.ts';
 import { sitesFC } from '../sites.ts';
@@ -301,8 +301,46 @@ function aircraftCard(a: Aircraft): HTMLElement {
   if (motion) line(motion);
   if (a.emergency || (a.squawk && EMERGENCY_SQUAWKS.has(a.squawk))) line(`Squawk ${a.squawk ?? '—'}: ${a.squawk && SQUAWK_MEANING[a.squawk] ? SQUAWK_MEANING[a.squawk] : a.emergency}`, 'alert');
   else if (a.squawk) line(`Squawk ${a.squawk}`, 'muted');
-  line([a.rssi !== undefined ? `Signal ${Math.round(a.rssi)} dBFS` : undefined, `heard ${Math.round(a.seen)} s ago`].filter(Boolean).join(' · '), 'muted');
+  line([a.via === 'uat' ? 'UAT 978 MHz' : 'ADS-B 1090 MHz', a.rssi !== undefined ? `signal ${Math.round(a.rssi)} dB` : undefined, `heard ${Math.round(a.seen)} s ago`].filter(Boolean).join(' · '), 'muted');
   return card;
+}
+
+function aprsFC(list: AprsStation[], nowMs: number): FC {
+  return {
+    type: 'FeatureCollection',
+    features: list
+      .filter((st) => st.lat !== undefined && st.lon !== undefined)
+      .map((st) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [st.lon!, st.lat!] }, properties: { id: `aprs:${st.call}`, call: st.call, wx: Boolean(st.weather), age: (nowMs - st.lastHeard) / 60_000, info: JSON.stringify(st) } })),
+  };
+}
+
+function uatStationsFC(list: UatStation[]): FC {
+  return { type: 'FeatureCollection', features: list.map((st) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [st.lon, st.lat] }, properties: { id: `uatgs:${st.lat},${st.lon}`, info: JSON.stringify(st) } })) };
+}
+
+const fmtTime = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+const fmtFt = (ft: number) => (ft >= 18000 ? `FL${Math.round(ft / 100)}` : `${Math.round(ft / 100) * 100} ft`);
+
+function card(lines: [string, string?][]): HTMLElement {
+  const c = document.createElement('div');
+  c.className = 'nav-card';
+  lines.forEach(([text, cls], i) => {
+    const d = document.createElement(i === 0 ? 'b' : 'div');
+    if (cls) d.className = cls;
+    d.textContent = text;
+    c.append(d);
+  });
+  return c;
+}
+
+function aprsCard(st: AprsStation): HTMLElement {
+  const wx = st.weather;
+  const lines: [string, string?][] = [[st.call], [[st.symbol ? st.symbol.charAt(0).toUpperCase() + st.symbol.slice(1) : 'APRS station', st.object ? `placed by ${st.object}` : ''].filter(Boolean).join(' · ')]];
+  if (wx) lines.push([[wx.tempF !== undefined ? `${Math.round(wx.tempF)}°F` : '', wx.windMph !== undefined ? `wind ${wx.windMph} mph${wx.gustMph ? ` (gust ${wx.gustMph})` : ''}` : '', wx.humidity !== undefined ? `${wx.humidity}%` : '', wx.pressureMb !== undefined ? `${wx.pressureMb.toFixed(1)} mb` : ''].filter(Boolean).join(' · ')]);
+  if (st.speedKt) lines.push([`${Math.round(st.speedKt)} kt${st.course !== undefined ? ` · heading ${st.course}°` : ''}${st.altFt ? ` · ${Math.round(st.altFt).toLocaleString('en-US')} ft` : ''}`]);
+  if (st.comment) lines.push([`“${st.comment}”`, 'muted']);
+  lines.push([`${st.packets} packet${st.packets === 1 ? '' : 's'}${st.via ? ` · via ${st.via}` : ''} · last heard ${fmtTime(st.lastHeard)} · 144.390 MHz`, 'muted']);
+  return card(lines);
 }
 
 function ringsFC(home: Home): FC {
@@ -334,6 +372,8 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
   const [overlays, setOverlays] = useState<Overlays>({});
   const [layer, setLayer] = useState<Layer>('live');
   const [tracks, setTracks] = useState<Tracks>();
+  const tracksRef = useRef<Tracks>(undefined);
+  tracksRef.current = tracks;
   const [trails, setTrails] = useState(true);
   const approx = useRef(false);
   const onScreen = useRef(true);
@@ -391,7 +431,7 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
     };
     // Touch screens never send mouseleave: a tap on empty map closes the card.
     m.on('click', (e) => {
-      const layers = ['aids', 'sites', 'aircraft'].filter((l) => m.getLayer(l));
+      const layers = ['aids', 'sites', 'aircraft', 'aprs', 'uat-gs', 'trails-hit'].filter((l) => m.getLayer(l));
       if (!m.queryRenderedFeatures(e.point, { layers }).length) {
         hover.remove();
         shown = undefined;
@@ -409,6 +449,42 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
       m.addSource('trails', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       m.addLayer({ id: 'trails-line', type: 'line', source: 'trails', filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-cap': 'round' }, paint: { 'line-color': TRAIL_COLOR as never, 'line-width': ['interpolate', ['linear'], ['zoom'], 7, 1.2, 11, 2.2], 'line-opacity': AGE_OPACITY as never } });
       m.addLayer({ id: 'trails-dot', type: 'circle', source: 'trails', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 1.8, 'circle-color': TRAIL_COLOR as never, 'circle-opacity': AGE_OPACITY as never } });
+      // Invisible, wider copy of the trails so they're easy to hover.
+      m.addLayer({ id: 'trails-hit', type: 'line', source: 'trails', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 10 } });
+      hoverCard('trails-hit', '280px', (e) => {
+        const f = e.features?.[0];
+        const tr = f && tracksRef.current?.tracks.find((t) => t.id === f.properties?.id);
+        if (!tr || !tr.pts.length) return undefined;
+        const alts = tr.pts.map((p) => p[2]).filter((v): v is number => v !== null);
+        const first = tr.pts[0][3] * 1000;
+        const last = tr.pts[tr.pts.length - 1][3] * 1000;
+        const here = Number(f.properties?.alt);
+        const lines: [string, string?][] = [[tr.label ?? tr.id.replace(/^\w+:/, '').toUpperCase()]];
+        const what = [tr.info?.type, tr.info?.reg && tr.info.reg !== tr.label ? tr.info.reg : undefined].filter(Boolean).join(' · ');
+        if (what) lines.push([what]);
+        if (tr.info?.owner) lines.push([tr.info.owner, 'muted']);
+        lines.push([`Seen ${fmtTime(first)}–${fmtTime(last)}${alts.length ? ` · ${fmtFt(Math.min(...alts))}–${fmtFt(Math.max(...alts))}` : ''}`]);
+        lines.push([`Here at ${fmtTime(Number(f.properties?.t) * 1000)}${here >= 0 ? `, ${fmtFt(here)}` : ''}`, 'muted']);
+        lines.push([`${tr.pts.length} points · from ${(tr.info?.sources ?? [tr.kind === 'dl' ? 'datalink' : tr.kind === 'sea' ? 'AIS' : 'ADS-B']).join(' + ')}`, 'muted']);
+        return { at: [e.lngLat.lng, e.lngLat.lat], card: card(lines) };
+      });
+      // APRS stations (amateur radio): green dots, weather stations amber; UAT ground stations: hollow squares.
+      m.addSource('aprs', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      m.addLayer({ id: 'aprs', type: 'circle', source: 'aprs', paint: { 'circle-radius': 4, 'circle-color': ['case', ['get', 'wx'], '#f5b547', '#9be35a'], 'circle-stroke-color': '#0b0e13', 'circle-stroke-width': 1, 'circle-opacity': ['interpolate', ['linear'], ['get', 'age'], 0, 1, 360, 0.6, 1440, 0.3] } });
+      m.addLayer({ id: 'aprs-labels', type: 'symbol', source: 'aprs', minzoom: 10, layout: { 'text-field': ['get', 'call'], 'text-font': ['Noto Sans Regular'], 'text-size': 10, 'text-offset': [0, 0.9], 'text-anchor': 'top', 'text-optional': true }, paint: { 'text-color': '#9be35a', 'text-halo-color': '#0b0e13', 'text-halo-width': 1.2 } });
+      hoverCard('aprs', '260px', (e) => {
+        const f = e.features?.[0];
+        if (!f || f.geometry.type !== 'Point') return undefined;
+        return { at: f.geometry.coordinates as [number, number], card: aprsCard(JSON.parse(String(f.properties?.info)) as AprsStation) };
+      });
+      m.addSource('uat-gs', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      m.addLayer({ id: 'uat-gs', type: 'circle', source: 'uat-gs', paint: { 'circle-radius': 5, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': '#5ab0ff', 'circle-stroke-width': 1.5 } });
+      hoverCard('uat-gs', '240px', (e) => {
+        const f = e.features?.[0];
+        if (!f || f.geometry.type !== 'Point') return undefined;
+        const st = JSON.parse(String(f.properties?.info)) as UatStation;
+        return { at: f.geometry.coordinates as [number, number], card: card([['UAT ground station'], ['FIS-B weather and flight information broadcasts on 978 MHz'], [`${st.frames.toLocaleString('en-US')} frames heard · last ${fmtTime(st.lastHeard)}`, 'muted']]) };
+      });
       m.addLayer({ id: 'rings', type: 'line', source: 'rings', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#3a4659', 'line-width': 1, 'line-dasharray': [2, 3] } });
       m.addLayer({ id: 'ring-labels', type: 'symbol', source: 'rings', filter: ['has', 'label'], layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 10, 'text-offset': [0, -0.8] }, paint: { 'text-color': '#8b93a1' } });
       m.addLayer({ id: 'home-halo', type: 'circle', source: 'rings', filter: ['has', 'home'], paint: { 'circle-radius': 14, 'circle-color': '#4ade80', 'circle-opacity': 0.15, 'circle-radius-transition': { duration: 0 }, 'circle-opacity-transition': { duration: 0 } } });
@@ -561,6 +637,8 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
     (m.getSource('balloons') as GeoJSONSource).setData(balloonsFC(snapshot.balloons ?? []));
     (m.getSource('sea') as GeoJSONSource).setData(vesselsFC(snapshot.vessels, snapshot.aisFixed, snapshot.now));
     (m.getSource('sites') as GeoJSONSource).setData(sitesFC(snapshot));
+    (m.getSource('aprs') as GeoJSONSource | undefined)?.setData(aprsFC(snapshot.aprs ?? [], snapshot.now));
+    (m.getSource('uat-gs') as GeoJSONSource | undefined)?.setData(uatStationsFC(snapshot.uatStations ?? []));
     if (snapshot.home) {
       (m.getSource('rings') as GeoJSONSource).setData(ringsFC(snapshot.home));
       if (snapshot.home.approx && !approx.current) {

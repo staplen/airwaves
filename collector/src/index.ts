@@ -1,6 +1,6 @@
 import { createServer, type ServerResponse } from 'node:http';
 import { createSocket } from 'node:dgram';
-import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { copyFile, mkdir, readdir, readFile, unlink } from 'node:fs/promises';
 import { dirname, extname, join, normalize } from 'node:path';
 import { connect as mqttConnect } from 'mqtt';
@@ -15,6 +15,10 @@ import { ingestTrains, SAMPLE_RATE as TRAIN_RATE, type TrainBurst } from './trai
 import { decodeEot, describeEot, describeHot } from './eot.ts';
 import { clipPeaks, wavSamples } from './peaks.ts';
 import { loadGroundStations } from './groundstations.ts';
+import { AprsState, ingestAprsFiles, tcpLines, UatState } from './extra.ts';
+import { parseAcarsdec } from './acarsdec.ts';
+import { ingestSurvey, surveyReport, type SurveyState } from './survey.ts';
+import type { AprsPacket } from './aprs.ts';
 import { approxHome, randomOffset, type Offset } from './privacy.ts';
 import { readOverlays } from './overlays.ts';
 import { Publisher } from './publisher.ts';
@@ -35,6 +39,10 @@ const DATA_DIR = env.DATA_DIR ?? 'data';
 const MQTT_URL = env.MQTT_URL; // e.g. mqtt://127.0.0.1:1883; ingest is off without it
 const AIS_UDP_PORT = Number(env.AIS_UDP_PORT ?? 4100);
 const VDL2_UDP_PORT = Number(env.VDL2_UDP_PORT ?? 4101);
+const ACARS_UDP_PORT = Number(env.ACARS_UDP_PORT ?? 5551); // acarsdec (plain VHF ACARS) JSON
+const UAT_JSON_PORT = Number(env.UAT_JSON_PORT ?? 30979); // dump978-fa, while the UAT slot runs
+const UAT_RAW_PORT = Number(env.UAT_RAW_PORT ?? 30978);
+const APRS_DIR = env.APRS_DIR ?? join(dirname(env.DATA_DIR ?? 'data'), 'aprs'); // multimon-ng APRS lines
 const CLIPS_ROOT = env.CLIPS_ROOT; // folder holding atc/, noaa/ and radio/ clip folders
 // rtl_power sweeps land here; default is a "spectrum" folder next to DATA_DIR (/airwaves/spectrum on the Pi).
 const SPECTRUM_DIR = env.SPECTRUM_DIR ?? join(dirname(env.DATA_DIR ?? 'data'), 'spectrum');
@@ -69,7 +77,12 @@ const SOURCES: Omit<SourceStatus, 'lastHeard' | 'running'>[] = [
   { id: 'sonde', name: 'Balloons', family: 'wx', freqMhz: 403 },
   { id: 'hdradio', name: 'HD Radio', family: 'bcast', freqMhz: 98 },
   { id: 'spectrum', name: 'Spectrum', family: 'bcast', freqMhz: 500 },
-  { id: 'uat', name: 'UAT', family: 'air', freqMhz: 978, note: 'Needs the attic 1090/978 antenna' },
+  { id: 'uat', name: 'UAT', family: 'air', freqMhz: 978 },
+  { id: 'trains', name: 'Trains', family: 'rail', freqMhz: 457.9375 },
+  { id: 'aprs', name: 'APRS', family: 'ham', freqMhz: 144.39 },
+  { id: 'acars', name: 'ACARS', family: 'air', freqMhz: 130.8 },
+  { id: 'rail', name: 'Rail radio', family: 'rail', freqMhz: 160.6875 },
+  { id: 'survey', name: 'Survey', family: 'bcast', freqMhz: 500 },
 ];
 
 const ATC_NAMES: Record<string, { name: string; freq: string }> = {
@@ -90,6 +103,9 @@ const vessels = new Map<number, Vessel>();
 const aisFixed = new Map<number, AisFixed>();
 const sondes = new SondeTracker();
 const tracks = new TrackStore(); // 24 h of positions for the map's contrails
+const uat = new UatState(); // 978 MHz aircraft and FIS-B ground stations
+const aprs = new AprsState(); // 144.39 MHz stations
+let survey: SurveyState = { surveys: {}, channels: {} }; // beta: what the fine sweeps keep finding
 const dlNames = new Map<string, { name: string; ts: number }>(); // ICAO hex → flight/registration seen on datalink
 const DL_NAME_MS = 12 * 3600_000;
 const dlName = (hex: string, now: number) => {
@@ -141,7 +157,10 @@ function snapshot(): Snapshot {
   // Between ADS-B passes, age each aircraft by the time since the last successful poll.
   const gapS = adsb.lastOk ? Math.max(0, (now - adsb.lastOk) / 1000) : 0;
   // No callsign on ADS-B? Use the flight number datalink reported for the same airframe (ICAO hex).
-  const aircraft = adsb.aircraft.map((a) => ({ ...a, flight: a.flight ?? dlName(a.hex, now), seen: a.seen + gapS }));
+  const onAdsb = adsb.aircraft.map((a) => ({ ...a, flight: a.flight ?? dlName(a.hex, now), seen: a.seen + gapS }));
+  // UAT (978 MHz) planes that 1090 didn't also hear.
+  const have = new Set(onAdsb.map((a) => a.hex));
+  const aircraft = [...onAdsb, ...uat.live(now).filter((a) => !have.has(a.hex)).map((a) => ({ ...a, flight: a.flight ?? dlName(a.hex, now) }))];
   const rssis = aircraft.map((a) => a.rssi).filter((v): v is number => v !== undefined);
   const adsbExpected = !rot || scheduler?.current?.slotId === 'adsb';
   return {
@@ -155,6 +174,8 @@ function snapshot(): Snapshot {
           loop: scheduler!.loop?.map((u) => ({ sourceId: u.slotId, minutes: u.minutes, freqMhz: u.freqMhz })),
           index: scheduler!.index,
           slots: scheduler!.slots,
+          beta: scheduler!.beta,
+          names: scheduler!.names,
         }
       : { mode: 'continuous', current: { sourceId: 'adsb', freqMhz: 1090, since: startedAt }, upNext: [] },
     sources: SOURCES.map((s) => ({
@@ -171,6 +192,8 @@ function snapshot(): Snapshot {
     aisFixed: [...aisFixed.values()],
     balloons: sondes.recent(now, 48 * 3600_000), // older flights stay on the map, fading
     atcHeard: Object.fromEntries(atcHeard),
+    aprs: aprs.recent(now),
+    uatStations: [...uat.stations.values()].filter((st) => now - st.lastHeard < 7 * 86_400_000),
     radio: [...radio.values()].sort((a, b) => Number(a.freq) - Number(b.freq) || a.program - b.program),
     totals: {
       aircraftToday: store.aircraftCount(day),
@@ -202,7 +225,7 @@ function slotFailure(id: string, now: number): string | undefined {
 
 
 // ---- header tiles: one headline number + one interesting line per slot ---------------------
-let trainsToday: { day: string; bursts: number; units?: number[] } = { day: '', bursts: 0, units: [] };
+let trainsToday: { day: string; bursts: number; units?: number[]; dpu?: number } = { day: '', bursts: 0, units: [] };
 let statsCache: { at: number; value: Record<string, SlotStat> } | undefined;
 const fmtAltFt = (ft: number) => (ft >= 18000 ? `FL${Math.round(ft / 100)}` : `${ft.toLocaleString('en-US')} ft`);
 const top = (xs: string[]) => {
@@ -240,12 +263,29 @@ function slotStats(now: number, aircraft: Aircraft[]): Record<string, SlotStat> 
         temp !== undefined
           ? { value: `${Math.round(temp)}°F`, label: pinnedTemp!.label, short: 'outside', brief: plural(cars, 'car'), detail: plural(cars, 'car') + ' passed today' }
           : { value: String(cars), label: 'cars passed', short: 'cars', brief: sensors.size ? plural(sensors.size, 'sensor') : undefined, detail: sensors.size ? `${plural(sensors.size, 'sensor')} heard` : undefined },
+      uat: (() => {
+        const n = store.countSightings(day, 'uat');
+        const gs = [...uat.stations.values()].filter((st) => now - st.lastHeard < 86_400_000).length;
+        return { value: n.toLocaleString('en-US'), label: 'aircraft on 978 today', short: 'on 978', brief: gs ? `${gs} ground station${gs === 1 ? '' : 's'}` : undefined, detail: `${uat.uplinks.toLocaleString('en-US')} FIS-B frames${gs ? ` from ${gs} ground station${gs === 1 ? '' : 's'}` : ''}` };
+      })(),
+      aprs: (() => {
+        const n = store.countSightings(day, 'aprs');
+        const wx = aprs.recent(now).filter((st) => st.weather).length;
+        return { value: n.toLocaleString('en-US'), label: 'APRS stations today', short: 'stations', brief: wx ? `${wx} weather` : undefined, detail: wx ? `${wx} weather station${wx === 1 ? '' : 's'}` : 'amateur radio on 144.39 MHz' };
+      })(),
+      acars: { value: store.countSightings(day, 'acars').toLocaleString('en-US'), label: 'flights on VHF ACARS', short: 'flights', brief: '130–131.5 MHz', detail: 'plain ACARS beside VDL2 datalink' },
+      rail: railStat(),
+      survey: (() => {
+        const found = surveyReport(survey).length;
+        const runs = Object.values(survey.surveys).reduce((a, b) => a + b, 0);
+        return { value: String(found), label: 'channels found', short: 'channels', brief: `${runs} sweeps`, detail: `${runs} fine sweeps so far · /api/survey` };
+      })(),
       trains: (() => {
         const t = trainsToday.day === day ? trainsToday : { bursts: 0, units: [] as number[] };
         const units = t.units?.length ?? 0;
         // Decoded end-of-train devices count as trains; bursts too noisy to decode are listed beside them.
         return units
-          ? { value: String(units), label: units === 1 ? 'train' : 'trains', short: 'trains', brief: `${t.bursts} bursts`, detail: `${t.bursts} bursts on 457.94 MHz` }
+          ? { value: String(units), label: units === 1 ? 'train' : 'trains', short: 'trains', brief: `${t.bursts} bursts`, detail: `${t.bursts} bursts on 457.94 MHz${'dpu' in t && t.dpu ? ` · ${t.dpu} distributed-power (beta)` : ''}` }
           : { value: String(t.bursts), label: 'train bursts', short: 'bursts', brief: 'probe', detail: 'probe on 457.94 MHz' };
       })(),
       noaa: { value: String(wxClips), label: 'weather radio clips', short: 'clips', brief: alerts ? plural(alerts, 'alert') : 'no alerts', detail: alerts ? plural(alerts, 'alert') + ' today' : tests.length ? `weekly test at ${new Date(tests[0].ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: env.TIMEZONE ?? 'America/New_York' })}` : 'no alerts today' },
@@ -409,7 +449,7 @@ async function tick() {
       lastAdsbRaw = now;
       rawLog.write('adsb', 'aircraft.json', JSON.stringify(adsb.raw), now);
     }
-    for (const a of adsb.aircraft) if (a.seen < 15 && a.lat !== undefined && a.lon !== undefined) tracks.add('air', `air:${a.hex}`, a.lon, a.lat, typeof a.altBaro === 'number' ? a.altBaro : null, now - a.seen * 1000, a.flight);
+    for (const a of adsb.aircraft) if (a.seen < 15 && a.lat !== undefined && a.lon !== undefined) tracks.add('air', `air:${a.hex}`, a.lon, a.lat, typeof a.altBaro === 'number' ? a.altBaro : null, now - a.seen * 1000, a.flight, { reg: a.reg, type: a.typeDesc, owner: a.owner, sources: ['ADS-B'] });
     // Record each aircraft at most once a minute: a write per aircraft every 2 s wears the SD card.
     for (const a of adsb.aircraft) {
       if (now - (lastAircraftSave.get(a.hex) ?? 0) < 60_000) continue;
@@ -452,7 +492,7 @@ function onAisLine(line: string) {
     v.lon = m.lon;
   }
   if ('sog' in m && m.sog !== undefined) v.sog = m.sog;
-  if ('lat' in m && m.lat !== undefined && m.lon !== undefined) tracks.add('sea', `sea:${m.mmsi}`, m.lon, m.lat, null, now, v.name);
+  if ('lat' in m && m.lat !== undefined && m.lon !== undefined) tracks.add('sea', `sea:${m.mmsi}`, m.lon, m.lat, null, now, v.name, { type: v.shipType, sources: ['AIS'] });
   if ('cog' in m && m.cog !== undefined) v.cog = m.cog;
   vessels.set(m.mmsi, v);
   const { first } = store.sight(localDay(now), 'ship', String(m.mmsi), now);
@@ -478,12 +518,16 @@ function onVdl2(raw: string) {
 }
 function onVdl2Frame(raw: string) {
   const c = parseVdl2(raw);
-  if (!c) return;
+  if (c) onDatalink(c);
+}
+/** One translated datalink message, from VDL2 or plain VHF ACARS: names, trails, sightings, feed. */
+function onDatalink(c: NonNullable<ReturnType<typeof parseVdl2>>) {
   const key = c.flight ?? c.reg ?? c.title;
   if (c.hex && (c.flight || c.reg)) dlNames.set(c.hex, { name: (c.flight ?? c.reg)!, ts: c.ts });
   const trackKey = c.hex ? `air:${c.hex}` : `dl:${key}`;
-  for (const p of c.points ?? []) tracks.add('dl', trackKey, p.lon, p.lat, p.altFt, p.ts, c.flight ?? c.reg);
-  if (!c.points && c.lat !== undefined && c.lon !== undefined && !c.coarse) tracks.add('dl', c.hex ? `air:${c.hex}` : `dl:${key}`, c.lon, c.lat, c.altFt, c.ts, c.flight ?? c.reg);
+  const dlInfo = { reg: c.reg, sources: ['datalink'] };
+  for (const p of c.points ?? []) tracks.add('dl', trackKey, p.lon, p.lat, p.altFt, p.ts, c.flight ?? c.reg, dlInfo);
+  if (!c.points && c.lat !== undefined && c.lon !== undefined && !c.coarse) tracks.add('dl', trackKey, c.lon, c.lat, c.altFt, c.ts, c.flight ?? c.reg, dlInfo);
   store.sight(localDay(c.ts), 'vdl2', key, c.ts);
   // At most one feed item per flight every 10 minutes, except controller datalink.
   const last = lastVdl2PerFlight.get(key) ?? 0;
@@ -599,6 +643,32 @@ function udp(port: number, onLine: (l: string) => void) {
 udp(AIS_UDP_PORT, onAisLine);
 udp(SONDE_UDP_PORT, onSonde);
 udp(VDL2_UDP_PORT, onVdl2);
+// Plain VHF ACARS from acarsdec: same translation and handling as VDL2 messages.
+udp(ACARS_UDP_PORT, (line) => {
+  heard('acars');
+  const j = tryJson(line);
+  logRaw('acars', String(j?.label ?? '?'), line);
+  const c = parseAcarsdec(line);
+  if (c) {
+    store.sight(localDay(c.ts), 'acars', `${c.flight ?? c.reg ?? c.title}`, c.ts);
+    onDatalink(c);
+  }
+});
+// UAT: dump978-fa serves JSON (aircraft) and raw frames (incl. FIS-B uplinks) over TCP while its slot runs.
+tcpLines(UAT_JSON_PORT, (line) => {
+  const now = Date.now();
+  heard('uat', now);
+  logRaw('uat', 'adsb', line, now);
+  const a = uat.onJson(line, now);
+  if (!a) return;
+  store.sight(localDay(now), 'uat', a.hex, now);
+  if (a.lat !== undefined && a.lon !== undefined) tracks.add('air', `air:${a.hex}`, a.lon, a.lat, typeof a.altBaro === 'number' ? a.altBaro : null, now, a.flight, { sources: ['UAT'] });
+});
+tcpLines(UAT_RAW_PORT, (line) => {
+  if (!line.startsWith('+')) return; // downlinks arrive decoded on the JSON port
+  logRaw('uat', 'uplink', line);
+  uat.onRaw(line);
+});
 // VDL2 ground station names (downloaded and cached; re-checked daily, refreshed when a week old).
 const loadGs = () => loadGroundStations(join(DATA_DIR, 'ground-stations.json')).then((n) => n && console.log(`ground stations: ${n} known`));
 void loadGs();
@@ -765,6 +835,11 @@ const server = createServer((req, res) => {
     res.end(JSON.stringify(currentSpectrum()));
     return;
   }
+  if (p === '/api/survey') {
+    // Beta: channels the fine sweeps keep finding (frequencies only, nothing decoded).
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ surveys: survey.surveys, channels: surveyReport(survey) }));
+    return;
+  }
   if (p === '/api/overlays') {
     const o = currentOverlays();
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(o));
@@ -792,7 +867,7 @@ async function housekeeping() {
   const rl = await rawLog.rotate(now);
   if (rl.deleted) console.log(`rawlog: ${rl.zipped} hours gzipped, ${rl.deleted} old files deleted`);
   const files = CLIPS_ROOT
-    ? (await purgeOldFiles(join(CLIPS_ROOT, 'atc'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'noaa'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'radio'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'trains'), CLIP_RETENTION_MS, ['.wav']))
+    ? (await purgeOldFiles(join(CLIPS_ROOT, 'atc'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'noaa'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'radio'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'trains'), CLIP_RETENTION_MS, ['.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'rail'), CLIP_RETENTION_MS, ['.mp3', '.wav']))
     : 0;
   const art = await purgeOldFiles(ART_DIR, CLIP_RETENTION_MS, ['.jpg', '.jpeg', '.png']);
   const maps = await purgeOldFiles(join(HD_DIR, 'maps'), 86_400_000, ['.png', '.jpg', '.jpeg', '.txt', '.gif']);
@@ -807,7 +882,12 @@ async function housekeeping() {
 // Results that land as files (spectrum sweeps, HD Radio logs) are picked up every minute.
 async function ingestFiles() {
   const now = Date.now();
-  if (await ingestSpectrum(SPECTRUM_DIR, store)) heard('spectrum', now);
+  if (await ingestSpectrum(SPECTRUM_DIR, store, (f, text) => rawLog.write('spectrum', f, text, now))) heard('spectrum', now);
+  if (await ingestSurvey(SPECTRUM_DIR, survey, (f, text) => rawLog.write('survey', f, text, now))) {
+    heard('survey', now);
+    store.setState('survey', survey);
+  }
+  if (await ingestAprsFiles(APRS_DIR, onAprs)) heard('aprs', now);
   const bursts = await ingestTrains(TRAINS_DIR);
   if (bursts.length) {
     const d = localDay(now);
@@ -861,6 +941,51 @@ function radioTag(c: { title?: string; textKind?: string; textSynced?: boolean; 
 }
 setInterval(() => void ingestFiles(), 60_000);
 
+// ---- beta: railroad voice recordings (counted, not posted) ------------------------------------
+let railCache: { at: number; stat: SlotStat } | undefined;
+function railStat(): SlotStat {
+  const now = Date.now();
+  if (railCache && now - railCache.at < 60_000) return railCache.stat;
+  const byFreq = new Map<string, number>();
+  let n = 0;
+  try {
+    for (const f of CLIPS_ROOT ? readdirSync(join(CLIPS_ROOT, 'rail')) : []) {
+      const m = f.match(/^RAIL_(\d+)/);
+      if (!m) continue;
+      n++;
+      byFreq.set(m[1], (byFreq.get(m[1]) ?? 0) + 1);
+    }
+  } catch {
+    /* no recordings yet */
+  }
+  const top = [...byFreq].sort((a, b) => b[1] - a[1])[0];
+  const stat: SlotStat = { value: String(n), label: 'transmissions (24 h)', short: 'transmissions', brief: top ? `busiest ${(Number(top[0]) / 1000).toFixed(3)}` : 'listening', detail: top ? `busiest channel ${(Number(top[0]) / 1000).toFixed(3)} MHz · recordings not posted yet` : 'recording all railroad channels; not posted yet' };
+  railCache = { at: now, stat };
+  return stat;
+}
+
+// ---- APRS: amateur stations on 144.39 MHz ---------------------------------------------------
+const aprsWeatherPosted = new Map<string, number>();
+function onAprs(p: AprsPacket, ts: number, line: string) {
+  logRaw('aprs', p.kind, line, ts);
+  const r = aprs.add(p, ts);
+  if (!r) return;
+  const st = r.station;
+  store.sight(localDay(ts), 'aprs', st.call, ts);
+  if (st.lat !== undefined && st.lon !== undefined && (st.speedKt ?? 0) > 2) tracks.add('ham', `aprs:${st.call}`, st.lon, st.lat, st.altFt ?? null, ts, st.call, { type: st.symbol, sources: ['APRS'] });
+  const what = st.symbol ? `${st.symbol.charAt(0).toUpperCase()}${st.symbol.slice(1)}` : 'Station';
+  const wx = st.weather;
+  const wxLine = wx ? [wx.tempF !== undefined ? `${Math.round(wx.tempF)}°F` : '', wx.windMph !== undefined ? `wind ${wx.windMph} mph${wx.windDir !== undefined ? ` from ${wx.windDir}°` : ''}` : '', wx.humidity !== undefined ? `${wx.humidity}% humidity` : '', wx.pressureMb !== undefined ? `${wx.pressureMb.toFixed(1)} mb` : ''].filter(Boolean).join(' · ') : '';
+  if (r.isNew) {
+    const body = [p.kind === 'object' || p.kind === 'item' ? `Object placed by ${st.object}` : what, st.speedKt ? `moving ${Math.round(st.speedKt)} kt` : '', wxLine, st.comment ? `“${st.comment}”` : '', st.via ? `via ${st.via}` : ''].filter(Boolean).join(' · ');
+    publishFeed({ ts, family: 'ham', kind: 'APRS', title: st.call, meta: '144.390', body: `${body}.` });
+    if (wx) aprsWeatherPosted.set(st.call, ts);
+  } else if (wx && ts - (aprsWeatherPosted.get(st.call) ?? 0) > 3 * 3600_000) {
+    aprsWeatherPosted.set(st.call, ts);
+    publishFeed({ ts, family: 'ham', kind: 'APRS weather', title: `${st.call} weather`, meta: '144.390', body: `${wxLine}.` });
+  }
+}
+
 // ---- trains: end-of-train device bursts on 457.9375 MHz -------------------------------------
 /** Decodes a burst clip: the card's title and text, and the device's unit number when the checksum passed. */
 async function readTrain(file: string, ms?: number): Promise<{ title: string; body: string; unit?: number }> {
@@ -882,6 +1007,11 @@ async function postTrain(b: TrainBurst): Promise<number | undefined> {
   const h = b.hot?.[0];
   if (h) {
     publishFeed({ ts: b.at, family: 'rail', kind: 'Train', title: `Locomotive · ${h.command === 'emergency brake' ? 'EMERGENCY' : 'status request'} to EOT ${h.unit}`, meta: '452.938', body: describeHot(h) });
+    return undefined;
+  }
+  if (b.dpu) {
+    // Beta: distributed-power traffic is noted (raw log above, count on the trains tile), not posted.
+    trainsToday.dpu = (trainsToday.dpu ?? 0) + 1;
     return undefined;
   }
   const p = b.packets?.[0];
@@ -929,6 +1059,8 @@ function saveState() {
   store.setState('tracks', tracks.export());
   store.setState('radio', [...radio.values()]);
   store.setState('sensors', [...sensors.values()]);
+  store.setState('aprs', aprs.recent(Date.now(), 3 * 86_400_000));
+  store.setState('uatStations', [...uat.stations.values()]);
 }
 function loadState() {
   for (const [k, v] of Object.entries(store.getState<Record<string, number>>('lastHeard') ?? {})) if (typeof v === 'number') lastHeard.set(k, v);
@@ -936,6 +1068,9 @@ function loadState() {
   for (const v of store.getState<Vessel[]>('vessels') ?? []) if (v.lastSeen > day) vessels.set(v.mmsi, v);
   for (const f of store.getState<AisFixed[]>('aisFixed') ?? []) aisFixed.set(f.mmsi, f);
   adsb.home ??= store.getState('home');
+  aprs.load(store.getState('aprs'), Date.now());
+  for (const st of store.getState<{ lat: number; lon: number; frames: number; lastHeard: number }[]>('uatStations') ?? []) uat.stations.set(`${st.lat.toFixed(2)},${st.lon.toFixed(2)}`, st);
+  survey = store.getState<SurveyState>('survey') ?? survey;
   publicOffset = store.getState<Offset>('publicOffset');
   if (!publicOffset) {
     publicOffset = randomOffset();

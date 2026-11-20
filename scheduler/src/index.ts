@@ -38,6 +38,7 @@ interface Slot {
   everyLoops?: number; // only join every Nth pass of the loop (0, N, 2N, …)
   everyMinutes?: number; // only join a pass if it last ran at least this long ago (e.g. 60 = hourly)
   runsOnce?: boolean; // the decoder does one job and exits (e.g. a spectrum sweep): exit code 0 ends the slot early, normally
+  beta?: boolean; // exploratory: listening/recording, but not (yet) decoded into the feed or map
 }
 
 interface Config {
@@ -159,6 +160,8 @@ function publish(loop: Slot[], index: number, since: number, endsAt: number) {
     current: { slotId: s.id, freqMhz: s.freqMhz, since, endsAt },
     upNext,
     slots: [...new Set(allSlots.map((x) => x.id))],
+    beta: [...new Set(allSlots.filter((x) => x.beta).map((x) => x.id))],
+    names: Object.fromEntries(allSlots.map((x) => [x.id, x.name.replace(/\s*\((?:night|deep|weekly|locomotive|beta)\)$/i, '')]).reverse()),
     failures,
     loop: loop.map((x) => ({ slotId: x.id, minutes: x.minutes, freqMhz: x.freqMhz })),
     index,

@@ -16,6 +16,7 @@ const CATEGORIES: { family: Family; subs: { id: string; label: string; kinds: st
   { family: 'wx', subs: [{ id: 'radio', label: 'Weather radio', kinds: ['Weather'] }, { id: 'alerts', label: 'Weather alerts', kinds: ['Weather alert', 'Weather test'] }, { id: 'balloons', label: 'Balloons', kinds: ['Balloon'] }] },
   { family: 'bcast', subs: [{ id: 'radio-hd', label: 'HD Radio', kinds: ['Radio'] }] },
   { family: 'rail', subs: [{ id: 'trains', label: 'Trains', kinds: ['Train'] }] },
+  { family: 'ham', subs: [{ id: 'aprs', label: 'APRS stations', kinds: ['APRS'] }, { id: 'aprs-wx', label: 'APRS weather', kinds: ['APRS weather'] }] },
   { family: 'home', subs: [{ id: 'street', label: 'Tire sensors', kinds: ['Street'] }, { id: 'sensors', label: 'Sensors', kinds: ['Sensor'] }, { id: 'meter', label: 'Gas meter', kinds: ['Home'] }] },
 ];
 interface TypeOpt { id: string; label: string; family: Family }
@@ -61,7 +62,7 @@ const listJoin = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0,
 
 type Opt = { key: string; title: string; kindLabel: string; family: Family; count: number };
 
-const FAMILY_ORDER: Family[] = ['air', 'bcast', 'wx', 'home', 'rail', 'sea'];
+const FAMILY_ORDER: Family[] = ['air', 'bcast', 'wx', 'home', 'rail', 'ham', 'sea'];
 
 // Rows are built in pages as the viewer scrolls, so a phone doesn't lay out hundreds of cards it never shows.
 const PAGE = 30;

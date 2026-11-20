@@ -54,9 +54,17 @@ export class ClipWatcher {
         const m = file.match(NAME);
         if (!m) continue;
         let size: number;
+        let mtime: number;
         try {
-          size = (await stat(`${path}/${file}`)).size;
+          const st = await stat(`${path}/${file}`);
+          size = st.size;
+          mtime = st.mtimeMs;
         } catch {
+          continue;
+        }
+        // Still empty: the encoder hasn't written yet (wait), or the recorder got no audio at all (drop it).
+        if (size === 0 && this.primed) {
+          if (Date.now() - mtime > 120_000) this.seen.add(key);
           continue;
         }
         // On the first poll, only remember existing files so a restart doesn't replay them all.

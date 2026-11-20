@@ -13,6 +13,7 @@
   --home: #a98bff;
   --bcast: #ff7eb6;
   --rail: #ff8f5a;
+  --ham: #9be35a;
   --live: #4ade80;
   --mono: 'JetBrains Mono', ui-monospace, monospace;
   color-scheme: dark;
@@ -283,3 +284,6 @@ button.ftoken { font: inherit; font-size: 12px; cursor: pointer; padding: 3px 10
   .lt, .lt-val .v { transition: none; }
   .lt.switching-out::after, .lt.next { animation: none; }
 }
+/* Beta (exploratory) slots in the loop band: dashed and muted, with a small tag. */
+.lt.beta { border-style: dashed; }
+.lt-beta { font-size: 9px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 4px; line-height: 14px; flex: none; }

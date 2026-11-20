@@ -1,6 +1,6 @@
 // Types shared by the collector API, the scheduler and the web dashboard.
 
-export type Family = 'air' | 'sea' | 'wx' | 'home' | 'bcast' | 'rail';
+export type Family = 'air' | 'sea' | 'wx' | 'home' | 'bcast' | 'rail' | 'ham';
 
 export interface Home {
   lat: number;
@@ -30,6 +30,34 @@ export interface Aircraft {
   squawk?: string;
   emergency?: string; // readsb's emergency state when not "none" (general, lifeguard, minfuel, nordo, unlawful, downed)
   selAltFt?: number; // altitude the crew has selected on the autopilot
+  via?: 'uat'; // heard on 978 MHz UAT instead of 1090 ADS-B
+}
+
+/** An APRS station (or object) heard on 144.39 MHz, with its latest report. */
+export interface AprsStation {
+  call: string;
+  lat?: number;
+  lon?: number;
+  symbol?: string; // e.g. "car", "weather station"
+  symbolCode?: string; // table + code, e.g. "/>"
+  comment?: string;
+  via?: string; // digipeater it came through
+  speedKt?: number;
+  course?: number;
+  altFt?: number;
+  weather?: { windDir?: number; windMph?: number; gustMph?: number; tempF?: number; humidity?: number; pressureMb?: number; rainLastHourIn?: number; rain24hIn?: number; rainSinceMidnightIn?: number; luminosity?: number };
+  object?: string; // for objects/items: the station that placed it
+  packets: number;
+  firstHeard: number;
+  lastHeard: number;
+}
+
+/** A UAT ground station (FIS-B), from the position in its uplink header. */
+export interface UatStation {
+  lat: number;
+  lon: number;
+  frames: number;
+  lastHeard: number;
 }
 
 export interface Vessel {
@@ -56,10 +84,18 @@ export interface AisFixed {
 
 /** A weather balloon (radiosonde) flight. */
 /** Recent positions for the map's fading contrails. */
-export type TrackKind = 'air' | 'dl' | 'sea';
+export type TrackKind = 'air' | 'dl' | 'sea' | 'ham';
 export interface Tracks {
   now: number;
-  tracks: { id: string; kind: TrackKind; label?: string; pts: [number, number, number | null, number][] }[]; // lon, lat, alt ft | null, unix s
+  tracks: { id: string; kind: TrackKind; label?: string; info?: TrackInfo; pts: [number, number, number | null, number][] }[]; // lon, lat, alt ft | null, unix s
+}
+
+/** What a trail came from, for its hover card. */
+export interface TrackInfo {
+  reg?: string;
+  type?: string; // long type name, e.g. "Boeing 737-800"
+  owner?: string;
+  sources?: string[]; // 'ADS-B', 'UAT', 'datalink', 'APRS', 'AIS'
 }
 
 export interface Balloon {
@@ -94,6 +130,8 @@ export interface SchedulerState {
   current?: { slotId: string; freqMhz: number; since: number; endsAt: number };
   upNext: { slotId: string; minutes: number }[];
   slots?: string[]; // every slot id in the loop
+  beta?: string[]; // slot ids that are exploratory: scanning, not (yet) decoded into the feed or map
+  names?: Record<string, string>; // display name per slot id
   failures?: Record<string, { at: number; reason: string }>; // last failure per slot
   loop?: { slotId: string; minutes: number; freqMhz?: number }[]; // this pass's slots in order (ids can repeat)
   index?: number; // position of the running slot in `loop`
@@ -111,6 +149,9 @@ export interface Rotation {
   index?: number;
   /** Every slot id the scheduler knows, in loop order (windowed and hourly ones included). */
   slots?: string[];
+  /** Exploratory slots: shown in the loop, knowingly disconnected from the feed and map. */
+  beta?: string[];
+  names?: Record<string, string>;
 }
 
 /** The header tile for one slot: today's headline number and a one-line detail worth reading. */
@@ -176,6 +217,10 @@ export interface Snapshot {
   balloons: Balloon[];
   /** Newest ATC clip per rtl_airband channel template (e.g. DCA_TWR), for map site activity. */
   atcHeard?: Record<string, number>;
+  /** APRS stations heard in the last 24 h. */
+  aprs?: AprsStation[];
+  /** UAT (978 MHz) FIS-B ground stations heard. */
+  uatStations?: UatStation[];
   radio: RadioStation[];
   totals: Totals;
   stats: { avgRssi?: number };

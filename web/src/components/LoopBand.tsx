@@ -32,19 +32,21 @@ export function LoopBand({ snapshot, start, end }: { snapshot?: Snapshot; start?
       <i className="lb-break" aria-hidden="true" />
       {ids.map((id) => {
         const so = snapshot?.sources.find((s) => s.id === id);
-        const name = so?.name ?? slotName(id);
-        const color = so ? FAMILY_COLOR[so.family] : 'var(--muted)';
+        const name = rot?.names?.[id] ?? so?.name ?? slotName(id);
+        // Beta slots are exploratory: on the loop so you can see them run, knowingly not wired to the feed or map.
+        const beta = rot?.beta?.includes(id) ?? false;
+        const color = beta ? 'var(--muted)' : so ? FAMILY_COLOR[so.family] : 'var(--muted)';
         const stat = snapshot?.slotStats?.[id];
         const active = cur?.sourceId === id;
         const when = active ? (rot?.mode === 'continuous' ? 'listening' : `${clock(left)} left`) : '';
         const quiet = !active && (stat?.value === '0' || stat?.value === undefined) && id !== 'spectrum';
-        const clickable = !!SOURCE_TYPES[id];
+        const clickable = !beta && !!SOURCE_TYPES[id];
         return (
           <div
             key={id}
-            className={`lt${active ? ' now' : ''}${active && switching ? ' switching-out' : ''}${!active && switching && id === nextId ? ' next' : ''}${quiet ? ' quiet' : ''}${clickable ? ' click' : ''}`}
+            className={`lt${beta ? ' beta' : ''}${active ? ' now' : ''}${active && switching ? ' switching-out' : ''}${!active && switching && id === nextId ? ' next' : ''}${quiet ? ' quiet' : ''}${clickable ? ' click' : ''}`}
             style={{ ['--c' as string]: color }}
-            title={clickable ? `Show only ${name} in the feed` : name}
+            title={beta ? `${name} (beta): scanning to learn what's here; not decoded into the feed or map yet` : clickable ? `Show only ${name} in the feed` : name}
             {...(clickable && {
               role: 'button',
               tabIndex: 0,
@@ -59,6 +61,7 @@ export function LoopBand({ snapshot, start, end }: { snapshot?: Snapshot; start?
           >
             <div className="lt-head">
               <span className="lt-name">{name}</span>
+              {beta && <span className="lt-beta">beta</span>}
               {active && (
                 <span className="lt-live">
                   <span className="dot" style={{ background: 'var(--live)' }} />

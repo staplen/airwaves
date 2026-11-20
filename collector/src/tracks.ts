@@ -1,4 +1,4 @@
-import type { TrackKind, Tracks } from '../../shared/types.ts';
+import type { TrackInfo, TrackKind, Tracks } from '../../shared/types.ts';
 
 // Recent positions per aircraft, datalink flight and ship, for the map's fading "contrails".
 // A ring buffer in memory (saved with the other state so deploys don't wipe it): points older than
@@ -7,6 +7,7 @@ import type { TrackKind, Tracks } from '../../shared/types.ts';
 interface Track {
   kind: TrackKind;
   label?: string;
+  info?: TrackInfo;
   pts: [number, number, number | null, number][]; // lon, lat, altitude ft (null = unknown or ground), unix seconds
 }
 
@@ -23,12 +24,16 @@ export class TrackStore {
   }
 
   /** `key` names the object across sources: aircraft are "air:<hex>" for both ADS-B and datalink, so one plane has one track. */
-  add(kind: TrackKind, key: string, lon: number, lat: number, altFt: number | null | undefined, ts: number, label?: string) {
+  add(kind: TrackKind, key: string, lon: number, lat: number, altFt: number | null | undefined, ts: number, label?: string, info?: TrackInfo) {
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || (lat === 0 && lon === 0)) return;
     let t = this.tracks.get(key);
     if (!t) this.tracks.set(key, (t = { kind, pts: [] }));
     if (kind === 'air') t.kind = 'air'; // seen on ADS-B: drawn as an aircraft trail, not a datalink-only one
     if (label) t.label = label;
+    if (info) {
+      const sources = [...new Set([...(t.info?.sources ?? []), ...(info.sources ?? [])])];
+      t.info = { ...t.info, ...Object.fromEntries(Object.entries(info).filter(([, v]) => v !== undefined)), sources };
+    }
     const s = Math.round(ts / 1000);
     const last = t.pts[t.pts.length - 1];
     if (last && s < last[3]) return; // out of order (datalink reports can lag)
@@ -50,11 +55,11 @@ export class TrackStore {
   /** The map's view: every track with points in the window. */
   export(now = Date.now()): Tracks {
     this.prune(now);
-    return { now, tracks: [...this.tracks].map(([k, t]) => ({ id: k, kind: t.kind, label: t.label, pts: t.pts })) };
+    return { now, tracks: [...this.tracks].map(([k, t]) => ({ id: k, kind: t.kind, label: t.label, info: t.info, pts: t.pts })) };
   }
 
   load(saved: Tracks | undefined, now = Date.now()) {
-    for (const t of saved?.tracks ?? []) this.tracks.set(t.id, { kind: t.kind, label: t.label, pts: t.pts });
+    for (const t of saved?.tracks ?? []) this.tracks.set(t.id, { kind: t.kind, label: t.label, info: t.info, pts: t.pts });
     this.prune(now);
   }
 }

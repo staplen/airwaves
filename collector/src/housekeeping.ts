@@ -37,10 +37,10 @@ export async function purgeOldFiles(dir: string, maxAgeMs: number, exts: string[
  * Folds finished rtl_power sweeps (CSV) into the 7-day spectrum table, then deletes them.
  * rtl_power rows: date, time, hz_low, hz_high, hz_step, samples, dB, dB, …
  */
-export async function ingestSpectrum(dir: string, store: Store): Promise<number> {
+export async function ingestSpectrum(dir: string, store: Store, onRaw?: (file: string, text: string) => void): Promise<number> {
   let files: string[];
   try {
-    files = (await readdir(dir)).filter((f) => f.endsWith('.csv'));
+    files = (await readdir(dir)).filter((f) => f.endsWith('.csv') && !f.startsWith('survey_')); // survey sweeps: survey.ts
   } catch {
     return 0;
   }
@@ -51,7 +51,9 @@ export async function ingestSpectrum(dir: string, store: Store): Promise<number>
       const st = await stat(path);
       if (Date.now() - st.mtimeMs < 30_000) continue; // still being written
       const bins = new Map<number, number>();
-      for (const line of (await readFile(path, 'utf8')).split('\n')) {
+      const text = await readFile(path, 'utf8');
+      onRaw?.(f, text); // the full-resolution sweep goes to the raw log (72 h) before it's binned
+      for (const line of text.split('\n')) {
         const cols = line.split(',').map((c) => c.trim());
         if (cols.length < 7) continue;
         const low = Number(cols[2]);

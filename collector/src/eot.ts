@@ -186,3 +186,12 @@ export function describeHot(h: HotPacket): string {
     : `Locomotive asked end-of-train device ${h.unit} for a status update.`;
 }
 
+// ---- beta: distributed power (lead ↔ helper locomotives) --------------------------------------------------------
+// RIT's Detector-Station lists a DPU frame sync but no decoder; we only note bursts that carry it (raw log, count).
+const DPU_SYNC = '0011101100010110';
+export function hasDpuSync(x: Int16Array, sr: number): boolean {
+  const spb = sr / BAUD;
+  for (let phase = 0; phase < spb; phase += 2) if (bitsAt(x, sr, phase).includes(DPU_SYNC)) return true;
+  return false;
+}
+
