@@ -157,6 +157,8 @@ export interface Snapshot {
   vessels: Vessel[];
   aisFixed: AisFixed[];
   balloons: Balloon[];
+  /** Newest ATC clip per rtl_airband channel template (e.g. DCA_TWR), for map site activity. */
+  atcHeard?: Record<string, number>;
   radio: RadioStation[];
   totals: Totals;
   stats: { maxRangeNm: number; avgRssi?: number };

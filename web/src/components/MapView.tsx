@@ -7,6 +7,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import type { Aircraft, AisFixed, Balloon, Home, Overlays, Snapshot, Vessel } from '../../../shared/types.ts';
 import { apiUrl, isStatic } from '../api.ts';
 import { ago } from '../live.ts';
+import { sitesFC } from '../sites.ts';
 
 const STYLE = 'https://tiles.openfreemap.org/styles/dark';
 // Absolute, because the build uses a relative base and the worker must resolve against the page.
@@ -271,6 +272,7 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
       m.addSource('rings', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       m.addSource('aircraft', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       m.addSource('balloons', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      m.addSource('sites', { type: 'geojson', data: sitesFC(undefined) });
       m.addLayer({ id: 'rings', type: 'line', source: 'rings', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#3a4659', 'line-width': 1, 'line-dasharray': [2, 3] } });
       m.addLayer({ id: 'ring-labels', type: 'symbol', source: 'rings', filter: ['has', 'label'], layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 10, 'text-offset': [0, -0.8] }, paint: { 'text-color': '#8b93a1' } });
       m.addLayer({ id: 'home-halo', type: 'circle', source: 'rings', filter: ['has', 'home'], paint: { 'circle-radius': 14, 'circle-color': '#4ade80', 'circle-opacity': 0.15, 'circle-radius-transition': { duration: 0 }, 'circle-opacity-transition': { duration: 0 } } });
@@ -308,6 +310,53 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
       m.addLayer({ id: 'balloon-tracks', type: 'line', source: 'balloons', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#f5b547', 'line-width': 2, 'line-dasharray': [2, 2] } });
       m.addLayer({ id: 'balloons', type: 'circle', source: 'balloons', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 6, 'circle-color': '#f5b547', 'circle-stroke-color': '#0b0e13', 'circle-stroke-width': 1.5 } });
       m.addLayer({ id: 'balloon-labels', type: 'symbol', source: 'balloons', filter: ['==', ['geometry-type'], 'Point'], layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 11, 'text-offset': [0.9, 0], 'text-anchor': 'left' }, paint: { 'text-color': '#f5b547', 'text-halo-color': '#0b0e13', 'text-halo-width': 1.2 } });
+      // Transmitter sites: muted dots, pulsing while their frequency is on air.
+      m.addLayer({ id: 'site-pulse', type: 'circle', source: 'sites', filter: ['==', ['get', 'on'], true], paint: { 'circle-radius': 6, 'circle-color': ['get', 'color'], 'circle-opacity': 0.3, 'circle-radius-transition': { duration: 0 }, 'circle-opacity-transition': { duration: 0 } } });
+      m.addLayer({
+        id: 'sites',
+        type: 'circle',
+        source: 'sites',
+        filter: ['!', ['has', 'pulseOnly']],
+        paint: {
+          'circle-radius': ['case', ['get', 'on'], 5.5, 4],
+          'circle-color': ['get', 'color'],
+          'circle-opacity': ['case', ['get', 'on'], 1, 0.6],
+          'circle-stroke-color': '#0b0e13',
+          'circle-stroke-width': 1.2,
+        },
+      });
+      m.addLayer({
+        id: 'site-labels',
+        type: 'symbol',
+        source: 'sites',
+        filter: ['!', ['has', 'pulseOnly']],
+        layout: { 'text-field': ['step', ['zoom'], ['get', 'label'], 9, ['get', 'name']], 'text-font': ['Noto Sans Regular'], 'text-size': 10, 'text-offset': [0, 0.9], 'text-anchor': 'top', 'text-optional': true },
+        paint: { 'text-color': ['get', 'color'], 'text-opacity': ['case', ['get', 'on'], 1, 0.6], 'text-halo-color': '#0b0e13', 'text-halo-width': 1.2 },
+      });
+      m.on('mouseenter', 'sites', () => (m.getCanvas().style.cursor = 'pointer'));
+      m.on('mouseleave', 'sites', () => (m.getCanvas().style.cursor = ''));
+      m.on('click', 'sites', (e) => {
+        const f = e.features?.[0];
+        if (!f || f.geometry.type !== 'Point') return;
+        const p = f.properties as { name: string; note: string; channels: string };
+        const card = document.createElement('div');
+        card.className = 'nav-card';
+        const h = document.createElement('b');
+        h.textContent = p.name;
+        card.append(h);
+        for (const c of JSON.parse(p.channels) as { label: string; freq?: number; on: boolean }[]) {
+          const row = document.createElement('div');
+          row.textContent = `${c.label}${c.freq ? ` · ${c.freq.toFixed(c.freq < 140 && c.freq > 108 ? 3 : 1)} MHz` : ''}${c.on ? ' · on air' : ''}`;
+          card.append(row);
+        }
+        if (p.note) {
+          const n = document.createElement('div');
+          n.className = 'muted';
+          n.textContent = p.note;
+          card.append(n);
+        }
+        new Popup({ closeButton: false, maxWidth: '260px', className: 'nav-popup', offset: 10 }).setLngLat(f.geometry.coordinates as [number, number]).setDOMContent(card).addTo(m);
+      });
       m.addLayer({
         id: 'aircraft',
         type: 'symbol',
@@ -346,6 +395,11 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
             m.setPaintProperty('home-halo', 'circle-radius', 6 + 16 * p);
             m.setPaintProperty('home-halo', 'circle-opacity', 0.35 * (1 - p));
           }
+          if (m.getLayer('site-pulse')) {
+            const q = (t % 1800) / 1800;
+            m.setPaintProperty('site-pulse', 'circle-radius', 5 + 13 * q);
+            m.setPaintProperty('site-pulse', 'circle-opacity', 0.45 * (1 - q));
+          }
           pulse = requestAnimationFrame(tick);
         };
         pulse = requestAnimationFrame(tick);
@@ -363,6 +417,7 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
     (m.getSource('aircraft') as GeoJSONSource).setData(aircraftFC(snapshot.aircraft));
     (m.getSource('balloons') as GeoJSONSource).setData(balloonsFC(snapshot.balloons ?? []));
     (m.getSource('sea') as GeoJSONSource).setData(vesselsFC(snapshot.vessels, snapshot.aisFixed, snapshot.now));
+    (m.getSource('sites') as GeoJSONSource).setData(sitesFC(snapshot));
     if (snapshot.home) {
       (m.getSource('rings') as GeoJSONSource).setData(ringsFC(snapshot.home));
       if (snapshot.home.approx && !approx.current) {

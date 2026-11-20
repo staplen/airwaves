@@ -99,6 +99,7 @@ let lastSummary = 0;
 let tpmsNewSinceSummary = 0;
 const lastVdl2PerFlight = new Map<string, number>();
 const lastSensorPost = new Map<string, number>();
+const atcHeard = new Map<string, number>(); // rtl_airband channel template → newest clip time (map sites pulse)
 const lastAircraftSave = new Map<string, number>();
 const clients = new Map<ServerResponse, boolean>(); // response → is public viewer
 
@@ -148,6 +149,7 @@ function snapshot(): Snapshot {
     vessels: [...vessels.values()].filter((v) => now - v.lastSeen < 3 * 3600_000),
     aisFixed: [...aisFixed.values()],
     balloons: sondes.recent(now),
+    atcHeard: Object.fromEntries(atcHeard),
     radio: [...radio.values()].sort((a, b) => Number(a.freq) - Number(b.freq) || a.program - b.program),
     totals: {
       aircraftToday: store.aircraftCount(day),
@@ -521,6 +523,7 @@ function onClip(c: Clip) {
   if (c.dir === 'atc') {
     heard('atc', c.ts);
     store.sight(localDay(c.ts), 'atc', c.file, c.ts);
+    atcHeard.set(c.template, Math.max(atcHeard.get(c.template) ?? 0, c.ts));
     const ch = ATC_NAMES[c.template] ?? { name: c.template.replace(/_/g, ' '), freq: '' };
     publishFeed({ ts: c.ts, family: 'air', kind: 'ATC', title: ch.name, meta: `${ch.freq}`, body: '', clip: url });
   } else if (c.dir === 'noaa') {
