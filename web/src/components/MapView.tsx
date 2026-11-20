@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Map as MlMap, Popup, setWorkerUrl, type GeoJSONSource } from 'maplibre-gl';
+import { Map as MlMap, Popup, setWorkerUrl, type GeoJSONSource, type MapLayerMouseEvent } from 'maplibre-gl';
 // MapLibre loads its worker relative to its own module, which breaks once bundled.
 // Let Vite bundle the worker (with its shared chunk) and hand MapLibre the URL.
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
@@ -274,6 +274,38 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
     const collapseAttribution = () => m.getContainer().querySelector('.maplibregl-ctrl-attrib.maplibregl-compact-show')?.classList.remove('maplibregl-compact-show');
     m.once('idle', collapseAttribution);
     m.on('resize', collapseAttribution);
+    // Hover a marker for its card (tap on touch screens): one shared popup, replaced as the pointer moves.
+    const hover = new Popup({ closeButton: false, closeOnClick: false, className: 'nav-popup', offset: 10 });
+    let shown: unknown;
+    const hoverCard = (layer: string, maxWidth: string, build: (e: MapLayerMouseEvent) => { at: [number, number]; card: HTMLElement } | undefined) => {
+      const show = (e: MapLayerMouseEvent) => {
+        const f = e.features?.[0];
+        const key = f ? `${f.properties?.id ?? f.properties?.title ?? ''}:${JSON.stringify(f.geometry.type === 'Point' ? f.geometry.coordinates : '')}` : undefined;
+        if (key === shown) return;
+        const r = build(e);
+        if (!r) return;
+        shown = key;
+        hover.setMaxWidth(maxWidth).setLngLat(r.at).setDOMContent(r.card).addTo(m);
+      };
+      m.on('mousemove', layer, (e) => {
+        m.getCanvas().style.cursor = 'pointer';
+        show(e);
+      });
+      m.on('click', layer, show);
+      m.on('mouseleave', layer, () => {
+        m.getCanvas().style.cursor = '';
+        hover.remove();
+        shown = undefined;
+      });
+    };
+    // Touch screens never send mouseleave: a tap on empty map closes the card.
+    m.on('click', (e) => {
+      const layers = ['aids', 'sites'].filter((l) => m.getLayer(l));
+      if (!m.queryRenderedFeatures(e.point, { layers }).length) {
+        hover.remove();
+        shown = undefined;
+      }
+    });
     m.on('load', () => {
       m.addImage('plane', planeImage(), { sdf: true });
       m.addImage('ship', shipImage(), { sdf: true });
@@ -292,11 +324,9 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
       (['nav-port', 'nav-stbd', 'nav-light', 'nav-other', 'nav-station'] as const).forEach((k) => m.addImage(k, navImage(k), { pixelRatio: 1.5 }));
       m.addLayer({ id: 'aids', type: 'symbol', source: 'sea', filter: ['!=', ['get', 'kind'], 'ship'], layout: { 'icon-image': ['get', 'icon'], 'icon-allow-overlap': true } });
       // Click a marker for a small card: what it is, which side of the channel, and where the data came from.
-      m.on('mouseenter', 'aids', () => (m.getCanvas().style.cursor = 'pointer'));
-      m.on('mouseleave', 'aids', () => (m.getCanvas().style.cursor = ''));
-      m.on('click', 'aids', (e) => {
+      hoverCard('aids', '240px', (e) => {
         const f = e.features?.[0];
-        if (!f || f.geometry.type !== 'Point') return;
+        if (!f || f.geometry.type !== 'Point') return undefined;
         const p = f.properties as { title: string; what: string; lastSeen: number; kind: string };
         const card = document.createElement('div');
         card.className = 'nav-card';
@@ -308,7 +338,7 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
         src.className = 'muted';
         src.textContent = `Source: ${p.kind === 'base' ? 'its own AIS broadcast' : 'AIS aid-to-navigation broadcast'} · last heard ${ago(Number(p.lastSeen), Date.now())}`;
         card.append(h, what, src);
-        new Popup({ closeButton: false, maxWidth: '240px', className: 'nav-popup', offset: 10 }).setLngLat(f.geometry.coordinates as [number, number]).setDOMContent(card).addTo(m);
+        return { at: f.geometry.coordinates as [number, number], card };
       });
       m.addLayer({ id: 'aid-labels', type: 'symbol', source: 'sea', filter: ['!=', ['get', 'kind'], 'ship'], layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': ['interpolate', ['linear'], ['zoom'], 7, 9, 11, 11], 'text-offset': [0.9, 0], 'text-anchor': 'left', 'text-optional': true }, paint: { 'text-color': '#c9cfd8', 'text-halo-color': '#0b0e13', 'text-halo-width': 1.2 } });
       m.addLayer({
@@ -345,11 +375,9 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
         layout: { 'text-field': ['step', ['zoom'], ['get', 'label'], 9, ['get', 'name']], 'text-font': ['Noto Sans Regular'], 'text-size': 10, 'text-offset': [0, 0.9], 'text-anchor': 'top', 'text-optional': true },
         paint: { 'text-color': ['get', 'color'], 'text-opacity': ['case', ['get', 'on'], 1, 0.6], 'text-halo-color': '#0b0e13', 'text-halo-width': 1.2 },
       });
-      m.on('mouseenter', 'sites', () => (m.getCanvas().style.cursor = 'pointer'));
-      m.on('mouseleave', 'sites', () => (m.getCanvas().style.cursor = ''));
-      m.on('click', 'sites', (e) => {
+      hoverCard('sites', '260px', (e) => {
         const f = e.features?.[0];
-        if (!f || f.geometry.type !== 'Point') return;
+        if (!f || f.geometry.type !== 'Point') return undefined;
         const p = f.properties as { name: string; note: string; channels: string };
         const card = document.createElement('div');
         card.className = 'nav-card';
@@ -367,7 +395,7 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
           n.textContent = p.note;
           card.append(n);
         }
-        new Popup({ closeButton: false, maxWidth: '260px', className: 'nav-popup', offset: 10 }).setLngLat(f.geometry.coordinates as [number, number]).setDOMContent(card).addTo(m);
+        return { at: f.geometry.coordinates as [number, number], card };
       });
       m.addLayer({
         id: 'aircraft',
