@@ -1,6 +1,6 @@
 // Lets other parts of the page (the header loop strip) set the feed's type filter.
 
-/** Feed types each decoder slot produces. Slots with no feed items (spectrum, trains) aren't listed. */
+/** Feed types each decoder slot produces. Slots with no feed items (spectrum) aren't listed. */
 export const SOURCE_TYPES: Record<string, string[]> = {
   adsb: ['aircraft'],
   atc: ['atc'],
@@ -10,6 +10,7 @@ export const SOURCE_TYPES: Record<string, string[]> = {
   noaa: ['radio', 'alerts'],
   sonde: ['balloons'],
   hdradio: ['radio-hd', 'family:bcast'],
+  trains: ['trains', 'family:rail'],
 };
 
 const EVENT = 'airwaves:feed-only';

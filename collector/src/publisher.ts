@@ -9,7 +9,7 @@ const DAY_MS = 24 * 3600_000;
 const RETENTION_EVERY_MS = 10 * 60_000;
 const SPECTRUM_EVERY_MS = 10 * 60_000;
 const TRACKS_EVERY_MS = 3 * 60_000;
-const MEDIA_DIRS = ['clips/atc', 'clips/noaa', 'clips/radio', 'art', 'maps'];
+const MEDIA_DIRS = ['clips/atc', 'clips/noaa', 'clips/radio', 'clips/trains', 'art', 'maps'];
 
 // ---- pure helpers (unit-tested) ---------------------------------------------------------------
 

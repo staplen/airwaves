@@ -1,6 +1,6 @@
 // Types shared by the collector API, the scheduler and the web dashboard.
 
-export type Family = 'air' | 'sea' | 'wx' | 'home' | 'bcast';
+export type Family = 'air' | 'sea' | 'wx' | 'home' | 'bcast' | 'rail';
 
 export interface Home {
   lat: number;

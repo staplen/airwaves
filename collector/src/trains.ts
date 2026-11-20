@@ -101,16 +101,46 @@ function startOf(name: string, fallback: number): number {
   return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : fallback;
 }
 
-/** Processes finished recordings in `dir`; returns how many bursts were kept. */
-export async function ingestTrains(dir: string): Promise<number> {
+export interface TrainBurst {
+  at: number; // epoch ms
+  file: string; // WAV in <dir>/review
+  ms: number;
+  score: number;
+}
+
+/** Bursts logged in <dir>/review/log.jsonl since `sinceMs` whose WAV is still there (for backfilling the feed). */
+export async function loggedBursts(dir: string, sinceMs: number): Promise<TrainBurst[]> {
+  const review = join(dir, 'review');
+  let text = '';
+  try {
+    text = await readFile(join(review, 'log.jsonl'), 'utf8');
+  } catch {
+    return [];
+  }
+  const have = new Set(await readdir(review));
+  const out: TrainBurst[] = [];
+  for (const line of text.split('\n')) {
+    try {
+      const l = JSON.parse(line) as { type?: string; at?: string; file?: string; ms?: number; score?: number };
+      const at = l.at ? Date.parse(l.at) : NaN;
+      if (l.type === 'burst' && l.file && have.has(l.file) && at >= sinceMs) out.push({ at, file: l.file, ms: l.ms ?? 0, score: l.score ?? 0 });
+    } catch {
+      /* partial line */
+    }
+  }
+  return out;
+}
+
+/** Processes finished recordings in `dir`; returns the bursts kept. */
+export async function ingestTrains(dir: string): Promise<TrainBurst[]> {
   let files: string[];
   try {
     files = (await readdir(dir)).filter((f) => f.endsWith('.raw')).sort();
   } catch {
-    return 0;
+    return [];
   }
   const review = join(dir, 'review');
-  let kept = 0;
+  const kept: TrainBurst[] = [];
   for (const f of files) {
     const path = join(dir, f);
     try {
@@ -129,7 +159,7 @@ export async function ingestTrains(dir: string): Promise<number> {
         const z = Math.min(x.length, Math.ceil((b.endS + PAD_S) * SAMPLE_RATE));
         await writeFile(join(review, name), wav(x.slice(a, z)));
         lines.push({ type: 'burst', at: at.toISOString(), file: name, ms: Math.round((b.endS - b.startS) * 1000), score: Number(b.score.toFixed(2)) });
-        kept++;
+        kept.push({ at: at.getTime(), file: name, ms: Math.round((b.endS - b.startS) * 1000), score: Number(b.score.toFixed(2)) });
       }
       await appendFile(join(review, 'log.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
       console.log(`trains ${f}: ${bursts.length} burst(s), noise rms ${Math.round(noiseRms)}`);

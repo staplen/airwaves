@@ -1,6 +1,7 @@
 import { createServer, type ServerResponse } from 'node:http';
 import { createSocket } from 'node:dgram';
 import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs';
+import { copyFile, mkdir } from 'node:fs/promises';
 import { dirname, extname, join, normalize } from 'node:path';
 import { connect as mqttConnect } from 'mqtt';
 import type { Aircraft, AisFixed, Balloon, FeedItem, Overlays, Pin, PinMetric, RadioStation, SchedulerState, SensorInfo, SlotStat, Snapshot, SourceStatus, SpectrumHeat, Tracks, Vessel } from '../../shared/types.ts';
@@ -10,7 +11,7 @@ import { ClipWatcher, type Clip } from './clips.ts';
 import { parseSame } from './eas.ts';
 import { ingestSpectrum, purgeOldFiles, SPECTRUM_BINS } from './housekeeping.ts';
 import { ingestHdRadio } from './hdradio.ts';
-import { ingestTrains } from './trains.ts';
+import { ingestTrains, loggedBursts, type TrainBurst } from './trains.ts';
 import { approxHome, randomOffset, type Offset } from './privacy.ts';
 import { readOverlays } from './overlays.ts';
 import { Publisher } from './publisher.ts';
@@ -670,7 +671,7 @@ const server = createServer((req, res) => {
 async function housekeeping() {
   const now = Date.now();
   const files = CLIPS_ROOT
-    ? (await purgeOldFiles(join(CLIPS_ROOT, 'atc'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'noaa'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'radio'), CLIP_RETENTION_MS, ['.mp3', '.wav']))
+    ? (await purgeOldFiles(join(CLIPS_ROOT, 'atc'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'noaa'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'radio'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'trains'), CLIP_RETENTION_MS, ['.wav']))
     : 0;
   const art = await purgeOldFiles(ART_DIR, CLIP_RETENTION_MS, ['.jpg', '.jpeg', '.png']);
   const maps = await purgeOldFiles(join(HD_DIR, 'maps'), 86_400_000, ['.png', '.jpg', '.jpeg', '.txt', '.gif']);
@@ -687,10 +688,11 @@ async function ingestFiles() {
   const now = Date.now();
   if (await ingestSpectrum(SPECTRUM_DIR, store)) heard('spectrum', now);
   const bursts = await ingestTrains(TRAINS_DIR);
-  if (bursts) {
+  if (bursts.length) {
     const d = localDay(now);
-    trainsToday = { day: d, bursts: (trainsToday.day === d ? trainsToday.bursts : 0) + bursts };
+    trainsToday = { day: d, bursts: (trainsToday.day === d ? trainsToday.bursts : 0) + bursts.length };
     store.setState('trainsToday', trainsToday);
+    for (const b of bursts) await postTrain(b);
   }
   mkdirSync(ART_DIR, { recursive: true });
   const radioClips = CLIPS_ROOT ? join(CLIPS_ROOT, 'radio') : undefined;
@@ -733,6 +735,29 @@ function radioTag(c: { title?: string; textKind?: string; textSynced?: boolean; 
   return undefined;
 }
 setInterval(() => void ingestFiles(), 60_000);
+
+// ---- trains: end-of-train device bursts on 457.9375 MHz -------------------------------------
+async function postTrain(b: TrainBurst) {
+  let clip: string | undefined;
+  if (CLIPS_ROOT) {
+    try {
+      await mkdir(join(CLIPS_ROOT, 'trains'), { recursive: true });
+      await copyFile(join(TRAINS_DIR, 'review', b.file), join(CLIPS_ROOT, 'trains', b.file));
+      clip = `/api/clips/trains/${encodeURIComponent(b.file)}`;
+    } catch {
+      /* no clip: the card still shows */
+    }
+  }
+  publishFeed({ ts: b.at, family: 'rail', kind: 'Train', title: 'Train passing', meta: '457.938', body: `A ${b.ms} ms data burst from a train's end-of-train device (the box on the last car that reports brake pressure). Not decoded yet.`, clip });
+}
+// Bursts caught before trains reached the feed: post them once.
+if (!store.getState('trainsBackfilled')) {
+  store.setState('trainsBackfilled', true);
+  void loggedBursts(TRAINS_DIR, Date.now() - 7 * 86_400_000).then(async (list) => {
+    for (const b of list) await postTrain(b);
+    if (list.length) console.log(`trains: backfilled ${list.length} burst(s) into the feed`);
+  });
+}
 
 // ---- state that survives restarts: ships, buoys, home location ------------------------------------
 function saveState() {

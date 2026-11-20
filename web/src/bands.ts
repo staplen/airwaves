@@ -6,6 +6,7 @@ export const FAMILY_COLOR: Record<Family, string> = {
   wx: '#f5b547',
   home: '#a98bff',
   bcast: '#ff7eb6',
+  rail: '#ff8f5a',
 };
 
 export const FAMILY_LABEL: Record<Family, string> = {
@@ -14,6 +15,7 @@ export const FAMILY_LABEL: Record<Family, string> = {
   wx: 'Weather',
   home: 'Home',
   bcast: 'Broadcast',
+  rail: 'Rail',
 };
 
 /** Bands drawn on the dial. sourceIds link a band to the decoders that use it. */
@@ -23,6 +25,7 @@ export const BANDS: { name: string; lo: number; hi: number; family: Family; sour
   { name: 'NOAA·AIS', lo: 161.9, hi: 162.6, family: 'wx', sourceIds: ['noaa', 'ais'] },
   { name: 'TPMS', lo: 314.5, hi: 315.5, family: 'home', sourceIds: ['ism'] },
   { name: 'Sondes', lo: 400, hi: 406, family: 'wx', sourceIds: ['sonde'] },
+  { name: 'Rail', lo: 457.5, hi: 458.4, family: 'rail', sourceIds: ['trains'] },
   { name: '433', lo: 433.4, hi: 434.4, family: 'home', sourceIds: ['ism'] },
   { name: 'Meters', lo: 911, hi: 919, family: 'home', sourceIds: ['ism'] },
   { name: 'UAT', lo: 977, hi: 979, family: 'air', sourceIds: ['uat'] },
