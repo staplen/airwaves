@@ -183,7 +183,7 @@ function snapshot(): Snapshot {
       running: s.id === 'adsb' || planned.has(s.id),
       lastHeard: lastHeardFor(s.id, now),
       error:
-        s.id === 'adsb' && adsb.lastError && adsbExpected
+        s.id === 'adsb' && adsb.lastError && adsbExpected && now - adsb.lastOk > 30_000
           ? `Receiver unreachable (${adsb.lastError})`
           : slotFailure(s.id, now),
     })),
@@ -220,7 +220,9 @@ function snapshot(): Snapshot {
 function slotFailure(id: string, now: number): string | undefined {
   const f = scheduler?.failures?.[id];
   const loopMs = (scheduler?.loopMinutes ?? 19) * 60_000 * 1.2;
-  return f && now - f.at < loopMs ? `Slot failed: ${f.reason}` : undefined;
+  // Shown for about one loop, and cleared as soon as the source is heard again after the failure.
+  if (!f || now - f.at >= loopMs || (lastHeardFor(id, now) ?? 0) > f.at) return undefined;
+  return `Slot failed: ${f.reason}`;
 }
 
 
