@@ -51,10 +51,11 @@ export function App() {
     <div className="page">
       <h1 className="sr-only">Airwaves</h1>
       <LoopBand
+        part="head"
         snapshot={view}
         start={
           <div className="lb-brand">
-            <svg className="logo" width="26" height="26" viewBox="0 0 32 32" role="img" aria-label={connected ? 'Airwaves, live' : 'Airwaves, reconnecting'}>
+            <svg className="logo" width="22" height="22" viewBox="0 0 32 32" role="img" aria-label={connected ? 'Airwaves, live' : 'Airwaves, reconnecting'}>
               <title>Airwaves</title>
               <circle cx="16" cy="16" r="3.2" fill={connected ? '#4ade80' : '#8b93a1'} />
               <path d="M11.76 11.76 A6 6 0 0 0 11.76 20.24 M20.24 11.76 A6 6 0 0 1 20.24 20.24 M8.22 8.22 A11 11 0 0 0 8.22 23.78 M23.78 8.22 A11 11 0 0 1 23.78 23.78" fill="none" stroke="#e6e9ee" strokeWidth="2.2" strokeLinecap="round" />
@@ -74,11 +75,17 @@ export function App() {
           </div>
         }
       />
-      {dialOpen && <Dial snapshot={view} />}
-      <SensorPins snapshot={view} />
+      {/* Wide screens: the on-air card, dial, pins and map on the left; the feed alongside from the top. */}
       <div className="main">
-        <MapView snapshot={snapshot} />
-        <Feed items={feed} />
+        <div className="maincol">
+          <LoopBand part="onair" snapshot={view} />
+          {dialOpen && <Dial snapshot={view} />}
+          <SensorPins snapshot={view} />
+          <MapView snapshot={snapshot} />
+        </div>
+        <div className="feedcol">
+          <Feed items={feed} />
+        </div>
       </div>
     </div>
   );

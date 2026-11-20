@@ -15,7 +15,7 @@ const FALLBACK_FAMILY: Record<string, Family> = { trains: 'rail', rail: 'rail', 
  * on air opened into a card: the frequency, the slot and its countdown, every slot of that family with today's
  * number, and what's up next. Chips and slot tiles filter the feed.
  */
-export function LoopBand({ snapshot, start, end }: { snapshot?: Snapshot; start?: ReactNode; end?: ReactNode }) {
+export function LoopBand({ snapshot, start, end, part }: { snapshot?: Snapshot; start?: ReactNode; end?: ReactNode; part: 'head' | 'onair' }) {
   const rot = snapshot?.rotation;
   const now = snapshot?.now ?? Date.now();
   const cur = rot?.current;
@@ -36,17 +36,6 @@ export function LoopBand({ snapshot, start, end }: { snapshot?: Snapshot; start?
   const families = FAMILY_ORDER.map((f) => ({ f, slots: ids.filter((id) => familyOf(id) === f) })).filter((x) => x.slots.length);
   const typesOf = (slots: string[]) => [...new Set(slots.flatMap((id) => SOURCE_TYPES[id] ?? []))];
 
-  // Up next: the following three entries of this pass, with when each starts.
-  const next: { id: string; inS: number }[] = [];
-  if (loop.length && idx >= 0 && cur?.endsAt) {
-    let t = cur.endsAt + SWITCH_GAP_MS;
-    for (let k = 1; k <= Math.min(3, loop.length - 1); k++) {
-      const e = loop[(idx + k) % loop.length];
-      next.push({ id: e.sourceId, inS: Math.max(0, (t - now) / 1000) });
-      t += e.minutes * 60_000 + SWITCH_GAP_MS;
-    }
-  }
-
   const chip = (f: Family, slots: string[]) => {
     const head = slots.map(stat).find((s) => s?.value !== undefined && s.value !== '');
     const types = typesOf(slots);
@@ -64,15 +53,17 @@ export function LoopBand({ snapshot, start, end }: { snapshot?: Snapshot; start?
   const onSlots = onFamily ? families.find((x) => x.f === onFamily)?.slots ?? [] : [];
   const color = onFamily ? FAMILY_COLOR[onFamily] : 'var(--muted)';
 
-  return (
-    <section className="loopband" aria-label="What the radio is listening to, and what it has heard today">
-      <div className="lb-head">
+  if (part === 'head')
+    return (
+      <header className="lb-head" aria-label="Airwaves, and what each family of signals has heard today">
         {start}
         <div className="lb-chips">{families.filter((x) => x.f !== onFamily).map((x) => chip(x.f, x.slots))}</div>
         {end}
-      </div>
-      {cur && (
-        <div className={`onair${switching ? ' switching-out' : ''}`} style={{ ['--c' as string]: color }}>
+      </header>
+    );
+  if (!cur) return null;
+  return (
+    <section className={`onair${switching ? ' switching-out' : ''}`} style={{ ['--c' as string]: color }} aria-label="What the radio is listening to now">
           <div className="onair-top">
             <span className="onair-freq">{cur.freqMhz.toFixed(3)}</span>
             <span className="muted">MHz</span>
@@ -122,19 +113,7 @@ export function LoopBand({ snapshot, start, end }: { snapshot?: Snapshot; start?
               );
             })}
           </div>
-          {next.length > 0 && (
-            <div className="onair-next">
-              <span className="lbl">Up next</span>
-              {next.map((n, i) => (
-                <span key={`${n.id}-${i}`} className="next" style={{ ['--c' as string]: FAMILY_COLOR[familyOf(n.id)] }}>
-                  <b>{nameOf(n.id)}</b> {clock(n.inS)}
-                </span>
-              ))}
-            </div>
-          )}
           {cur.endsAt && <div className="onair-prog" style={{ width: `${progress * 100}%` }} />}
-        </div>
-      )}
     </section>
   );
 }

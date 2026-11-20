@@ -30,6 +30,10 @@ const DEFAULT_RULE: Rule = { ...PER_LOOP, noun: ['item', 'items'] };
 const ruleOf = (kind: string) => RULES[kind] ?? DEFAULT_RULE;
 const CLIP_RETENTION_MS = 24 * 3600_000;
 
+/** Display names for feed kinds whose internal names mean little to most people. */
+export const KIND_LABEL: Record<string, string> = { APRS: 'Ham radio', 'APRS weather': 'Ham weather', Street: 'Tires' };
+export const kindLabel = (k: string) => KIND_LABEL[k] ?? k;
+
 export type Row = { key: string; items: FeedItem[] };
 
 /** Groups newest-first items: runs of a kind into bundles placed where their newest item was. */
@@ -57,6 +61,16 @@ export function bundleRows(items: FeedItem[]): Row[] {
 }
 
 const time = (ts: number, sec = false) => new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: sec ? '2-digit' : undefined });
+
+/** "5:34–5:36 PM", "11:58 AM–12:04 PM", or just "5:38 PM" when the whole run is within one minute (or second, for ATC). */
+export function timeRange(from: number, to: number, sec = false): string {
+  const a = time(from, sec);
+  const b = time(to, sec);
+  if (a === b) return b;
+  const suffix = (t: string) => t.match(/\s?[AP]\.?M\.?$/i)?.[0] ?? '';
+  const sa = suffix(a);
+  return sa && sa === suffix(b) ? `${a.slice(0, -sa.length)}–${b}` : `${a}–${b}`;
+}
 
 /** "United 210 · Republic 3698 ×2 · +4 more": who is in the bundle, most frequent first. */
 function whoLine(items: FeedItem[], max = 4): string {
@@ -93,13 +107,13 @@ export function BundleCard({ items, renderItem }: { items: FeedItem[]; renderIte
       <div className="bar" style={{ background: color }} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div className="catch-head">
-          <span className="catch-kind" style={{ color }}>{first.kind}</span>
+          <span className="catch-kind" style={{ color }}>{kindLabel(first.kind)}</span>
           <b style={{ fontSize: 13 }}>
             {titles.size === 1 && first.kind !== 'ATC' ? `${first.title} · ` : ''}
             {items.length} {rule.noun[1]}
           </b>
           <span className="mono muted" style={{ fontSize: 11, marginLeft: 'auto' }}>
-            {time(oldest, sec)}–{time(newest, sec)}
+            {timeRange(oldest, newest, sec)}
           </span>
         </div>
         {titles.size > 1 || first.kind === 'ATC' ? (

@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Family, FeedItem } from '../../../shared/types.ts';
 import { FAMILY_COLOR, FAMILY_LABEL } from '../bands.ts';
-import { BundleCard, bundleRows } from './Bundle.tsx';
+import { BundleCard, bundleRows, kindLabel } from './Bundle.tsx';
 import { ClipPlayer } from './ClipPlayer.tsx';
 import { onShowOnly } from '../feedFilter.ts';
 
@@ -16,7 +16,7 @@ const CATEGORIES: { family: Family; subs: { id: string; label: string; kinds: st
   { family: 'wx', subs: [{ id: 'radio', label: 'Weather radio', kinds: ['Weather'] }, { id: 'alerts', label: 'Weather alerts', kinds: ['Weather alert', 'Weather test'] }, { id: 'balloons', label: 'Balloons', kinds: ['Balloon'] }] },
   { family: 'bcast', subs: [{ id: 'radio-hd', label: 'HD Radio', kinds: ['Radio'] }] },
   { family: 'rail', subs: [{ id: 'trains', label: 'Trains', kinds: ['Train'] }] },
-  { family: 'ham', subs: [{ id: 'aprs', label: 'APRS stations', kinds: ['APRS'] }, { id: 'aprs-wx', label: 'APRS weather', kinds: ['APRS weather'] }] },
+  { family: 'ham', subs: [{ id: 'aprs', label: 'Ham radio stations', kinds: ['APRS'] }, { id: 'aprs-wx', label: 'Ham weather stations', kinds: ['APRS weather'] }] },
   { family: 'home', subs: [{ id: 'street', label: 'Tire sensors', kinds: ['Street'] }, { id: 'sensors', label: 'Sensors', kinds: ['Sensor'] }, { id: 'meter', label: 'Gas meter', kinds: ['Home'] }] },
 ];
 interface TypeOpt { id: string; label: string; family: Family }
@@ -207,7 +207,7 @@ export const Feed = memo(function Feed({ items }: { items: FeedItem[] }) {
         {i.image && !i.clip && <img className="catch-art" src={i.image} alt="" loading="lazy" width={56} height={56} />}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="catch-head">
-            <span className="catch-kind" style={{ color: FAMILY_COLOR[i.family] }}>{highlight(i.kind, words)}</span>
+            <span className="catch-kind" style={{ color: FAMILY_COLOR[i.family] }}>{highlight(kindLabel(i.kind), words)}</span>
             <b style={{ fontSize: 13 }}>{highlight(i.title, words)}</b>
             <span className="mono muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{highlight(metaLine(i), words)}</span>
           </div>

@@ -57,8 +57,16 @@ button.tog[aria-pressed='false'] { color: var(--muted); }
 .playhead { position: absolute; top: 16px; width: 2px; height: 40px; background: var(--live); box-shadow: 0 0 0 4px #4ade8033; transform: translateX(-1px); transition: left .6s ease; }
 
 /* Main row */
-.main { display: flex; flex-wrap: wrap; gap: 16px; }
-.mapcard { flex: 999 1 640px; min-width: 0; position: relative; overflow: hidden; height: 720px; }
+.main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 32%); gap: 16px; align-items: stretch; }
+.maincol { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+/* The feed fills the column beside the on-air card and map, scrolling inside it. */
+.feedcol { position: relative; min-width: 0; }
+.feedcol > .feed { position: absolute; inset: 0; height: auto; }
+@media (max-width: 1000px) {
+  .main { grid-template-columns: minmax(0, 1fr); }
+  .feedcol > .feed { position: static; height: 720px; }
+}
+.mapcard { min-width: 0; position: relative; overflow: hidden; height: 720px; }
 .mapcard .maplibregl-map { position: absolute; inset: 0; }
 .overlay-tl { position: absolute; top: 14px; left: 14px; display: flex; flex-wrap: wrap; gap: 8px; max-width: 64%; z-index: 2; }
 .overlay-tr { position: absolute; top: 14px; right: 14px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; z-index: 2; }
@@ -66,7 +74,7 @@ button.tog[aria-pressed='false'] { color: var(--muted); }
 .overlay-b > * { pointer-events: auto; }
 
 /* Feed */
-.feed { flex: 1 1 400px; min-width: 0; display: flex; flex-direction: column; gap: 10px; height: 720px; }
+.feed { min-width: 0; display: flex; flex-direction: column; gap: 10px; height: 720px; }
 /* Search-or-filter box: type tokens + free text in one field, suggestions below. */
 .fsearch { position: relative; }
 .fsearch-box { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 40px; padding: 3px 8px 3px 12px; border-radius: 10px; background: var(--card); border: 1px solid var(--line-strong); cursor: text; }
@@ -107,7 +115,7 @@ button.tog[aria-pressed='false'] { color: var(--muted); }
   .page { padding: 12px; }
   .mapcard { height: 520px; }
   /* Phones: the feed scrolls with the page instead of inside its own box (iOS handles nested scrolling badly). */
-  .feed { height: auto; }
+  .feed, .feedcol > .feed { height: auto; }
   .feed-list { overflow: visible; padding-right: 0; }
   .freq { font-size: 26px; }
 }
@@ -240,17 +248,17 @@ button.ftoken { font: inherit; font-size: 12px; cursor: pointer; padding: 3px 10
 .loopband { display: flex; flex-direction: column; gap: 10px; }
 .lb-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .lb-brand { flex: none; display: flex; align-items: center; gap: 8px; }
-.lb-title { font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+.lb-title { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
 .lb-status { font-size: 11px; color: var(--muted); }
 .lb-end { flex: none; display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .lb-chips { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
-.fam { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 11px; border-radius: 999px; background: var(--card); border: 1px solid var(--line); color: var(--text-2); font: 500 12px var(--sans, inherit); white-space: nowrap; cursor: pointer; }
+.fam { display: inline-flex; align-items: center; gap: 5px; min-height: 24px; padding: 0 9px; border-radius: 999px; background: var(--card); border: 1px solid var(--line); color: var(--text-2); font: 500 11.5px var(--sans, inherit); white-space: nowrap; cursor: pointer; }
 .fam:hover { border-color: var(--line-strong); }
 .fam:focus-visible, .slot:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
 .fam .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c); }
 .fam .n { font-family: var(--mono); color: var(--text); }
 .beta { font-size: 9px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); border: 1px dashed var(--line-strong); border-radius: 4px; padding: 0 4px; line-height: 14px; }
-.onair { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 10px; padding: 14px 18px 16px; border-radius: 14px; background: var(--card); border: 1px solid var(--line); }
+.onair { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 10px; padding: 12px 16px 14px; border-radius: 14px; background: var(--card); border: 1px solid var(--line); }
 .onair-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
 .onair-freq { font-family: var(--mono); font-size: 32px; font-weight: 500; letter-spacing: -.02em; line-height: 1; }
 .onair-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border-radius: 999px; background: var(--raised); border: 1px solid var(--line-strong); font-size: 12px; font-weight: 500; color: var(--c); }
@@ -265,8 +273,6 @@ button.slot:hover { border-color: var(--line-strong); }
 .slot .v { font-family: var(--mono); font-size: 18px; font-weight: 500; color: var(--text); }
 .slot .d { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
 .slot.now .d { color: var(--text-2); }
-.onair-next { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 12px; color: var(--muted); }
-.onair-next .next b { color: var(--c); font-weight: 500; }
 .onair-prog { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--live); transition: width 1s linear; }
 .onair.switching-out::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, #ffffff14, transparent); transform: translateX(-100%); animation: sw-shimmer 1.4s ease-in-out infinite; pointer-events: none; }
 @media (max-width: 720px) {

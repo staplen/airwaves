@@ -20,6 +20,7 @@ import { AprsState, ingestAprsFiles, tcpLines, UatState } from './extra.ts';
 import { parseAcarsdec } from './acarsdec.ts';
 import { ingestSurvey, surveyReport, type SurveyState } from './survey.ts';
 import type { AprsPacket } from './aprs.ts';
+import { describeAprs, weatherLine } from './aprstext.ts';
 import { approxHome, randomOffset, type Offset } from './privacy.ts';
 import { readOverlays } from './overlays.ts';
 import { Publisher } from './publisher.ts';
@@ -985,17 +986,31 @@ function onAprs(p: AprsPacket, ts: number, line: string) {
   const st = r.station;
   store.sight(localDay(ts), 'aprs', st.call, ts);
   if (st.lat !== undefined && st.lon !== undefined && (st.speedKt ?? 0) > 2) tracks.add('ham', `aprs:${st.call}`, st.lon, st.lat, st.altFt ?? null, ts, st.call, { type: st.symbol, sources: ['APRS'] });
-  const what = st.symbol ? `${st.symbol.charAt(0).toUpperCase()}${st.symbol.slice(1)}` : 'Station';
   const wx = st.weather;
-  const wxLine = wx ? [wx.tempF !== undefined ? `${Math.round(wx.tempF)}°F` : '', wx.windMph !== undefined ? `wind ${wx.windMph} mph${wx.windDir !== undefined ? ` from ${wx.windDir}°` : ''}` : '', wx.humidity !== undefined ? `${wx.humidity}% humidity` : '', wx.pressureMb !== undefined ? `${wx.pressureMb.toFixed(1)} mb` : ''].filter(Boolean).join(' · ') : '';
   if (r.isNew) {
-    const body = [p.kind === 'object' || p.kind === 'item' ? `Object placed by ${st.object}` : what, st.speedKt ? `moving ${Math.round(st.speedKt)} kt` : '', wxLine, st.comment ? `“${st.comment}”` : '', st.via ? `via ${st.via}` : ''].filter(Boolean).join(' · ');
-    publishFeed({ ts, family: 'ham', kind: 'APRS', title: st.call, meta: '144.390', body: `${body}.` });
+    const d = describeAprs(st);
+    publishFeed({ ts, family: 'ham', kind: 'APRS', title: d.title, meta: '144.390', body: d.body });
     if (wx) aprsWeatherPosted.set(st.call, ts);
   } else if (wx && ts - (aprsWeatherPosted.get(st.call) ?? 0) > 3 * 3600_000) {
     aprsWeatherPosted.set(st.call, ts);
-    publishFeed({ ts, family: 'ham', kind: 'APRS weather', title: `${st.call} weather`, meta: '144.390', body: `${wxLine}.` });
+    publishFeed({ ts, family: 'ham', kind: 'APRS weather', title: `${st.call} weather`, meta: '144.390', body: `${weatherLine(wx)}.` });
   }
+}
+
+// APRS cards posted before the plain-English wording: rewrite them once from the stations we know.
+if (!store.getState('aprsTextV2')) {
+  setTimeout(() => {
+    let n = 0;
+    for (const r of store.feedOfKind('APRS')) {
+      const st = aprs.stations.get(r.title);
+      if (!st) continue;
+      const d = describeAprs(st);
+      store.setTitleBody(r.id, d.title, d.body);
+      n++;
+    }
+    store.setState('aprsTextV2', true);
+    if (n) console.log(`aprs: reworded ${n} earlier card(s)`);
+  }, 5000).unref();
 }
 
 // ---- trains: end-of-train device bursts on 457.9375 MHz -------------------------------------

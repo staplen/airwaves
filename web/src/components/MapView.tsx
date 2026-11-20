@@ -8,6 +8,7 @@ import type { Aircraft, AisFixed, AprsStation, Balloon, Home, Overlays, Snapshot
 import { apiUrl, isStatic } from '../api.ts';
 import { ago } from '../live.ts';
 import { sitesFC } from '../sites.ts';
+import { timeRange } from './Bundle.tsx';
 import { AGE_OPACITY, TRAIL_COLOR, tracksFC } from '../trails.ts';
 
 const STYLE = 'https://tiles.openfreemap.org/styles/dark';
@@ -463,7 +464,7 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
         const what = [tr.info?.type, tr.info?.reg && tr.info.reg !== tr.label ? tr.info.reg : undefined].filter(Boolean).join(' · ');
         if (what) lines.push([what]);
         if (tr.info?.owner) lines.push([tr.info.owner, 'muted']);
-        lines.push([`Seen ${fmtTime(first)}–${fmtTime(last)}${alts.length ? ` · ${fmtFt(Math.min(...alts))}–${fmtFt(Math.max(...alts))}` : ''}`]);
+        lines.push([`Seen ${timeRange(first, last)}${alts.length ? ` · ${fmtFt(Math.min(...alts))}–${fmtFt(Math.max(...alts))}` : ''}`]);
         lines.push([`Here at ${fmtTime(Number(f.properties?.t) * 1000)}${here >= 0 ? `, ${fmtFt(here)}` : ''}`, 'muted']);
         lines.push([`${tr.pts.length} points · from ${(tr.info?.sources ?? [tr.kind === 'dl' ? 'datalink' : tr.kind === 'sea' ? 'AIS' : 'ADS-B']).join(' + ')}`, 'muted']);
         return { at: [e.lngLat.lng, e.lngLat.lat], card: card(lines) };
