@@ -3,7 +3,7 @@
   "standby": "ultrafeeder",
   "slots": [
     {
-      "id": "adsb", "name": "ADS-B", "freqMhz": 1090, "minutes": 0.5,
+      "id": "adsb", "name": "ADS-B", "freqMhz": 1090, "minutes": 1,
       "image": "ghcr.io/sdr-enthusiasts/docker-adsb-ultrafeeder:latest-build-845",
       "entrypoint": ["readsb"],
       "cmd": ["--device-type", "rtlsdr", "--device", "0", "--gain", "49.6",
@@ -17,8 +17,7 @@
       "binds": [
         "/mnt/data/supervisor/share/airwaves/app/deploy/atc/rtl_airband.conf:/app/rtl_airband.conf:ro",
         "/mnt/data/supervisor/media/airwaves/atc:/recordings"
-      ],
-      "extendIfActive": { "withinSec": 30, "maxExtraMinutes": 2 }
+      ]
     },
     {
       "id": "ais", "name": "Ships", "freqMhz": 162.0, "minutes": 0.5,
@@ -26,7 +25,7 @@
       "cmd": ["-u", "127.0.0.1", "4100"]
     },
     {
-      "id": "vdl2", "name": "Datalink", "freqMhz": 136.8, "minutes": 0.5,
+      "id": "vdl2", "name": "Datalink", "freqMhz": 136.8, "minutes": 1,
       "image": "ghcr.io/sdr-enthusiasts/docker-dumpvdl2:latest-build-443",
       "entrypoint": ["dumpvdl2"],
       "cmd": ["--rtlsdr", "0", "--gain", "44.5", "--correction", "0",
@@ -34,15 +33,25 @@
               "136650000", "136700000", "136725000", "136775000", "136800000", "136825000", "136875000", "136975000"]
     },
     {
-      "id": "ism", "name": "Sensors", "freqMhz": 315, "minutes": 0.5,
+      "id": "ism", "name": "Sensors", "freqMhz": 433.92, "minutes": 2,
       "image": "hertzg/rtl_433:25.12",
-      "comment": "915 MHz is listed twice so meters get half the slot; 7 s per hop (a 30 s slot).",
-      "cmd": ["-f", "315M", "-f", "433.92M", "-f", "915M", "-f", "915M", "-H", "7",
+      "comment": "433.92 is listed twice: 80 s for the neighbour's LaCrosse thermometer (reports about once a minute), then 40 s of 315 MHz tire sensors. 915 MHz meters dropped: none heard in the first 70 hours.",
+      "cmd": ["-f", "433.92M", "-f", "433.92M", "-f", "315M", "-H", "40",
               "-F", "mqtt://127.0.0.1:1883,user=${MQTT_USER},pass=${MQTT_PASS},retain=0,events=airwaves/rtl_433"]
     },
     {
-      "id": "trains", "name": "Trains (probe)", "freqMhz": 457.9375, "minutes": 3,
-      "comment": "Listening test for end-of-train devices: raw 12 kHz FM audio; the collector keeps any 1200-baud bursts in trains/review/.",
+      "id": "trains", "name": "Trains", "freqMhz": 457.9375, "minutes": 1,
+      "comment": "End-of-train devices: raw 12 kHz FM audio; the collector keeps any 1200-baud bursts in trains/review/. 1 minute by day: every burst so far came at night.",
+      "windows": [{ "start": "06:00", "end": "20:00" }],
+      "image": "ghcr.io/sdr-enthusiasts/docker-adsb-ultrafeeder:latest-build-845",
+      "entrypoint": ["rtl_fm"],
+      "cmd": ["-f", "457.9375M", "-M", "fm", "-s", "12k", "-g", "44.5", "/out/eot_${TS}.raw"],
+      "binds": ["/mnt/data/supervisor/share/airwaves/trains:/out"]
+    },
+    {
+      "id": "trains", "name": "Trains (night)", "freqMhz": 457.9375, "minutes": 3,
+      "comment": "3 minutes at night, when freight runs and all bursts so far were heard.",
+      "windows": [{ "start": "20:00", "end": "24:00" }, { "start": "00:00", "end": "06:00" }],
       "image": "ghcr.io/sdr-enthusiasts/docker-adsb-ultrafeeder:latest-build-845",
       "entrypoint": ["rtl_fm"],
       "cmd": ["-f", "457.9375M", "-M", "fm", "-s", "12k", "-g", "44.5", "/out/eot_${TS}.raw"],
@@ -63,7 +72,7 @@
       "env": ["MQTT_USER=${MQTT_USER}", "MQTT_PASS=${MQTT_PASS}"]
     },
     {
-      "id": "sonde", "name": "Weather balloon", "freqMhz": 403, "minutes": 5,
+      "id": "sonde", "name": "Weather balloon", "freqMhz": 403, "minutes": 8,
       "comment": "Twice-daily NWS launches (about 6 AM / 6 PM Eastern) and their ~2-hour flights.",
       "windows": [{ "start": "05:45", "end": "08:30" }, { "start": "17:45", "end": "20:30" }],
       "image": "ghcr.io/projecthorus/radiosonde_auto_rx:v1.9.0",
@@ -78,6 +87,13 @@
       "image": "airwaves-hdradio:local",
       "binds": ["/mnt/data/supervisor/share/airwaves/hdradio:/out"],
       "env": ["HD_STATIONS=${HD_STATIONS}", "HD_SNIPPET_SEC=12", "HD_SWEEP_MAX_SEC=20", "HD_DWELL_SEC=0"]
+    },
+    {
+      "id": "hdradio", "name": "HD Radio (deep)", "freqMhz": 99.5, "minutes": 4.5, "runsOnce": true, "everyLoops": 3,
+      "comment": "Every 3rd loop: a quick pass over the three stations that broadcast traffic/radar image maps, then 3 minutes on one of them (rotating every 20 min) so the whole traffic map, radar and album art come through.",
+      "image": "airwaves-hdradio:local",
+      "binds": ["/mnt/data/supervisor/share/airwaves/hdradio:/out"],
+      "env": ["HD_STATIONS=98.7:0 99.5:0 101.1:0", "HD_SNIPPET_SEC=12", "HD_SWEEP_MAX_SEC=20", "HD_DWELL_SEC=180"]
     },
     {
       "id": "spectrum", "name": "Spectrum", "freqMhz": 500, "minutes": 1, "everyMinutes": 60,

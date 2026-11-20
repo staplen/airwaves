@@ -10,6 +10,7 @@ export interface Vdl2Catch {
   reg?: string;
   title: string;
   body: string;
+  hex?: string; // the aircraft's ICAO address (lowercase, as readsb writes it): joins datalink to ADS-B
   lat?: number;
   lon?: number;
   altFt?: number;
@@ -78,6 +79,8 @@ export function parseVdl2(raw: string): Vdl2Catch | undefined {
   const avlc = obj(v.avlc);
   if (!avlc) return undefined;
   const acars = obj(avlc.acars);
+  // Downlinks come from the aircraft (src), uplinks go to it (dst).
+  const hex = str([obj(avlc.src), obj(avlc.dst)].find((x) => x?.type === 'Aircraft')?.addr)?.toLowerCase();
   const flight = str(acars?.flight)?.replace(/^\.+/, '');
   const reg = str(acars?.reg)?.replace(/^\.+/, '');
   const callsign = flight && !/^[A-Z0-9]{2}0000$/.test(flight) ? flight : undefined;
@@ -88,7 +91,7 @@ export function parseVdl2(raw: string): Vdl2Catch | undefined {
   if (cpdlc) {
     const text = findKey(cpdlc, 'msg_element') ?? findKey(cpdlc, 'msg_data') ?? findKey(cpdlc, 'atc_uplink_msg') ?? findKey(cpdlc, 'atc_downlink_msg');
     const words = JSON.stringify(text ?? cpdlc).match(/"([A-Z][A-Z _/]{2,})"/g)?.map((w) => w.replace(/"/g, '')) ?? [];
-    return { ts, freqMhz, flight, reg, title: `${who} · controller text`, body: translateCpdlc(words.slice(0, 6)), raw: words.join(' ') };
+    return { ts, freqMhz, flight, reg, hex, title: `${who} · controller text`, body: translateCpdlc(words.slice(0, 6)), raw: words.join(' ') };
   }
 
   // Ground station handoffs carry position, altitude and destination.
@@ -103,7 +106,7 @@ export function parseVdl2(raw: string): Vdl2Catch | undefined {
     const altFt = typeof loc?.alt === 'number' && loc.alt > 0 && loc.alt <= 60_000 ? (loc.alt as number) : undefined;
     if (!dest && lat === undefined) return undefined;
     const body = [dest ? `Bound for ${airport(dest)}` : 'Connected to a new ground station', altFt ? `at ${altFt.toLocaleString('en-US')} ft` : undefined].filter(Boolean).join(' ') + '.';
-    return { ts, freqMhz, flight, reg, title: `${who} · checked in`, body, lat, lon, altFt };
+    return { ts, freqMhz, flight, reg, hex, title: `${who} · checked in`, body, lat, lon, altFt };
   }
 
   // ACARS text: translate known formats, drop telemetry and encoded blobs.
@@ -111,5 +114,5 @@ export function parseVdl2(raw: string): Vdl2Catch | undefined {
   if (!acars || !text || looksEncoded(text)) return undefined;
   const tr = translateAcars(str(acars.label), text);
   if (!tr) return undefined;
-  return { ts, freqMhz, flight, reg, title: who, body: tr.headline, lat: tr.lat, lon: tr.lon, raw: tr.headline === text ? undefined : text };
+  return { ts, freqMhz, flight, reg, hex, title: who, body: tr.headline, lat: tr.lat, lon: tr.lon, raw: tr.headline === text ? undefined : text };
 }

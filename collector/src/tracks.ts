@@ -22,14 +22,16 @@ export class TrackStore {
     this.windowS = windowMs / 1000;
   }
 
-  add(kind: TrackKind, id: string, lon: number, lat: number, altFt: number | null | undefined, ts: number, label?: string) {
+  /** `key` names the object across sources: aircraft are "air:<hex>" for both ADS-B and datalink, so one plane has one track. */
+  add(kind: TrackKind, key: string, lon: number, lat: number, altFt: number | null | undefined, ts: number, label?: string) {
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || (lat === 0 && lon === 0)) return;
-    const key = `${kind}:${id}`;
     let t = this.tracks.get(key);
     if (!t) this.tracks.set(key, (t = { kind, pts: [] }));
+    if (kind === 'air') t.kind = 'air'; // seen on ADS-B: drawn as an aircraft trail, not a datalink-only one
     if (label) t.label = label;
     const s = Math.round(ts / 1000);
     const last = t.pts[t.pts.length - 1];
+    if (last && s < last[3]) return; // out of order (datalink reports can lag)
     if (last && (s - last[3] < MIN_GAP_S || Math.abs(last[0] - lon) + Math.abs(last[1] - lat) < MIN_MOVE_DEG)) return;
     t.pts.push([Math.round(lon * 1e5) / 1e5, Math.round(lat * 1e5) / 1e5, altFt == null || !Number.isFinite(altFt) ? null : Math.round(altFt), s]);
     if (t.pts.length > MAX_PTS) t.pts.shift();

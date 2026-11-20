@@ -60,7 +60,8 @@ test('VDL2 XID handoff mentions destination', () => {
       t: { sec: 1 },
       freq: 136975000,
       avlc: {
-        src: { addr: 'A22358' },
+        src: { addr: 'A22358', type: 'Aircraft' },
+        dst: { addr: '11108A', type: 'Ground station' },
         xid: { vdl_params: [{ name: 'dst_airport', value: 'KBOS' }, { name: 'ac_location', value: { loc: { lat: 38.0, lon: -76.9 }, alt: 35000 } }] },
       },
     },
@@ -69,6 +70,7 @@ test('VDL2 XID handoff mentions destination', () => {
   assert.ok(c);
   assert.match(c.body, /Boston/);
   assert.equal(c.altFt, 35000);
+  assert.equal(c.hex, 'a22358'); // joins to the ADS-B aircraft with the same ICAO address
   near(c.freqMhz, 136.975, 0.0001);
 });
 

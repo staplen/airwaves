@@ -87,6 +87,12 @@ const vessels = new Map<number, Vessel>();
 const aisFixed = new Map<number, AisFixed>();
 const sondes = new SondeTracker();
 const tracks = new TrackStore(); // 24 h of positions for the map's contrails
+const dlNames = new Map<string, { name: string; ts: number }>(); // ICAO hex → flight/registration seen on datalink
+const DL_NAME_MS = 12 * 3600_000;
+const dlName = (hex: string, now: number) => {
+  const n = dlNames.get(hex);
+  return n && now - n.ts < DL_NAME_MS ? n.name : undefined;
+};
 // Raw decoder output for the parsing audit (local network only, memory only): see /api/raw.
 const rawLog = new RawLog(RAW_DIR).start();
 let lastAdsbRaw = 0;
@@ -131,7 +137,8 @@ function snapshot(): Snapshot {
   const planned = new Set(scheduler?.slots ?? [...(scheduler?.upNext.map((u) => u.slotId) ?? []), scheduler?.current?.slotId]);
   // Between ADS-B passes, age each aircraft by the time since the last successful poll.
   const gapS = adsb.lastOk ? Math.max(0, (now - adsb.lastOk) / 1000) : 0;
-  const aircraft = adsb.aircraft.map((a) => ({ ...a, seen: a.seen + gapS }));
+  // No callsign on ADS-B? Use the flight number datalink reported for the same airframe (ICAO hex).
+  const aircraft = adsb.aircraft.map((a) => ({ ...a, flight: a.flight ?? dlName(a.hex, now), seen: a.seen + gapS }));
   const withPos = aircraft.filter((a) => a.distNm !== undefined);
   const rssis = aircraft.map((a) => a.rssi).filter((v): v is number => v !== undefined);
   const adsbExpected = !rot || scheduler?.current?.slotId === 'adsb';
@@ -354,7 +361,7 @@ async function tick() {
       lastAdsbRaw = now;
       rawLog.write('adsb', 'aircraft.json', JSON.stringify(adsb.raw), now);
     }
-    for (const a of adsb.aircraft) if (a.seen < 15 && a.lat !== undefined && a.lon !== undefined) tracks.add('air', a.hex, a.lon, a.lat, typeof a.altBaro === 'number' ? a.altBaro : null, now - a.seen * 1000, a.flight);
+    for (const a of adsb.aircraft) if (a.seen < 15 && a.lat !== undefined && a.lon !== undefined) tracks.add('air', `air:${a.hex}`, a.lon, a.lat, typeof a.altBaro === 'number' ? a.altBaro : null, now - a.seen * 1000, a.flight);
     // Record each aircraft at most once a minute: a write per aircraft every 2 s wears the SD card.
     for (const a of adsb.aircraft) {
       if (now - (lastAircraftSave.get(a.hex) ?? 0) < 60_000) continue;
@@ -396,7 +403,7 @@ function onAisLine(line: string) {
     v.lon = m.lon;
   }
   if ('sog' in m && m.sog !== undefined) v.sog = m.sog;
-  if ('lat' in m && m.lat !== undefined && m.lon !== undefined) tracks.add('sea', String(m.mmsi), m.lon, m.lat, null, now, v.name);
+  if ('lat' in m && m.lat !== undefined && m.lon !== undefined) tracks.add('sea', `sea:${m.mmsi}`, m.lon, m.lat, null, now, v.name);
   if ('cog' in m && m.cog !== undefined) v.cog = m.cog;
   vessels.set(m.mmsi, v);
   const { first } = store.sight(localDay(now), 'ship', String(m.mmsi), now);
@@ -420,7 +427,8 @@ function onVdl2(raw: string) {
   const c = parseVdl2(raw);
   if (!c) return;
   const key = c.flight ?? c.reg ?? c.title;
-  if (c.lat !== undefined && c.lon !== undefined) tracks.add('dl', key, c.lon, c.lat, c.altFt, c.ts, c.flight ?? c.reg);
+  if (c.hex && (c.flight || c.reg)) dlNames.set(c.hex, { name: (c.flight ?? c.reg)!, ts: c.ts });
+  if (c.lat !== undefined && c.lon !== undefined) tracks.add('dl', c.hex ? `air:${c.hex}` : `dl:${key}`, c.lon, c.lat, c.altFt, c.ts, c.flight ?? c.reg);
   store.sight(localDay(c.ts), 'vdl2', key, c.ts);
   // At most one feed item per flight every 10 minutes, except controller datalink.
   const last = lastVdl2PerFlight.get(key) ?? 0;
@@ -698,6 +706,7 @@ const server = createServer((req, res) => {
 // ---- housekeeping: bounded storage on the Pi ---------------------------------------------------
 async function housekeeping() {
   const now = Date.now();
+  for (const [hex, n] of dlNames) if (now - n.ts > DL_NAME_MS) dlNames.delete(hex);
   const rl = await rawLog.rotate(now);
   if (rl.deleted) console.log(`rawlog: ${rl.zipped} hours gzipped, ${rl.deleted} old files deleted`);
   const files = CLIPS_ROOT
