@@ -165,6 +165,13 @@ export class Store {
     return best || undefined;
   }
 
+  /** On how many different days any of these keys has been seen. */
+  daysSeen(source: string, keys: string[]): number {
+    if (!keys.length) return 0;
+    const row = this.db.prepare(`SELECT COUNT(DISTINCT day) AS n FROM sightings WHERE source = ? AND key IN (${keys.map(() => '?').join(',')})`).get(source, ...keys) as { n: number };
+    return Number(row.n);
+  }
+
   countSightings(day: string, source: string, minPasses = 1, maxPasses = 1e9): number {
     const row = this.db
       .prepare('SELECT COUNT(*) AS n FROM sightings WHERE day = ? AND source = ? AND passes >= ? AND passes <= ?')

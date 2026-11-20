@@ -19,7 +19,7 @@ const RULES: Record<string, Rule> = {
   Weather: { ...PER_HOUR, noun: ['clip', 'clips'] },
   Aircraft: { ...PER_HOUR, noun: ['update', 'updates'] },
   Sensor: { ...PER_HOUR, noun: ['reading', 'readings'] },
-  Street: { ...PER_HOUR, noun: ['update', 'updates'] },
+  Street: { ...PER_LOOP, noun: ['car', 'cars'] },
   Home: { ...PER_HOUR, noun: ['reading', 'readings'] },
   Balloon: { gap: 30 * MIN, span: 120 * MIN, noun: ['update', 'updates'] },
   Emergency: { gap: -1, span: -1, noun: ['alert', 'alerts'] }, // never folded: each one matters

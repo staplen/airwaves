@@ -14,6 +14,7 @@ import { ingestHdRadio } from './hdradio.ts';
 import { ingestTrains, SAMPLE_RATE as TRAIN_RATE, type TrainBurst } from './trains.ts';
 import { decodeEot, describeEot, describeHot } from './eot.ts';
 import { clipPeaks, wavSamples } from './peaks.ts';
+import { describeCar, TireGrouper, tireReading } from './tires.ts';
 import { loadGroundStations } from './groundstations.ts';
 import { AprsState, ingestAprsFiles, tcpLines, UatState } from './extra.ts';
 import { parseAcarsdec } from './acarsdec.ts';
@@ -409,17 +410,7 @@ function summarizeStreet(now: number) {
     const v = vessels.get(mmsi);
     if (v && now - firstSeen > 3 * 60_000) announceShip(v);
   }
-  if (tpmsNewSinceSummary === 0) return;
-  const day = localDay(now);
-  publishFeed({
-    ts: now,
-    family: 'home',
-    kind: 'Street',
-    title: `${tpmsNewSinceSummary} new tire sensor${tpmsNewSinceSummary === 1 ? '' : 's'}`,
-    meta: `315`,
-    body: `${store.countSightings(day, 'tpms', 1, 1)} passers-by and ${store.countSightings(day, 'tpms', 2)} regulars today.`,
-  });
-  tpmsNewSinceSummary = 0;
+  // Tire sensors are posted per car as they pass (see the tire section), not as a count.
 }
 
 // While rotating, ADS-B is on only during its slot, so summarize once per visit
@@ -555,6 +546,17 @@ function onSonde(raw: string) {
   }
 }
 
+// ---- tire sensors: one feed card per passing car ------------------------------------------
+const tires = new TireGrouper();
+setInterval(() => {
+  for (const car of tires.flush(Date.now())) {
+    const days = store.daysSeen('tpms', car.tires.map((t) => `${t.model}:${t.id}`));
+    const d = describeCar(car, days);
+    publishFeed({ ts: car.first, family: 'home', kind: 'Street', title: d.title, meta: '315', body: d.body });
+  }
+  tpmsNewSinceSummary = 0;
+}, 10_000).unref();
+
 // ---- rtl_433 and NOAA alerts (MQTT) -------------------------------------------------------
 function onRtl433(raw: string) {
   logRaw('rtl433', String(tryJson(raw)?.model ?? '?'), raw);
@@ -565,6 +567,7 @@ function onRtl433(raw: string) {
   if (e.kind === 'tpms') {
     const { first } = store.sight(day, 'tpms', `${e.model}:${e.id}`, e.ts);
     if (first) tpmsNewSinceSummary++;
+    tires.add(tireReading(e.model, e.id, e.fields, e.ts));
     return;
   }
   if (e.kind === 'meter') {
