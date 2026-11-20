@@ -29,3 +29,8 @@ export function onShowOnly(handler: (types: string[]) => void): () => void {
   window.addEventListener(EVENT, listener);
   return () => window.removeEventListener(EVENT, listener);
 }
+
+/** Show only these feed types (e.g. every type of a family's slots). */
+export function showOnlyTypes(types: string[]): void {
+  if (types.length) window.dispatchEvent(new CustomEvent<string[]>(EVENT, { detail: types }));
+}

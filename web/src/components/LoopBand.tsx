@@ -1,15 +1,19 @@
 import type { ReactNode } from 'react';
-import type { Snapshot } from '../../../shared/types.ts';
-import { FAMILY_COLOR } from '../bands.ts';
-import { SOURCE_TYPES, showOnlySource } from '../feedFilter.ts';
+import type { Family, Snapshot } from '../../../shared/types.ts';
+import { FAMILY_COLOR, FAMILY_LABEL } from '../bands.ts';
+import { SOURCE_TYPES, showOnlySource, showOnlyTypes } from '../feedFilter.ts';
 import { SWITCH_GAP_MS, slotName } from '../live.ts';
 
 const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.max(0, Math.round(s % 60))).padStart(2, '0')}`;
+const FAMILY_ORDER: Family[] = ['air', 'sea', 'home', 'rail', 'wx', 'bcast', 'ham'];
+
+// Slots whose family the collector doesn't list (shouldn't happen, but keep them visible).
+const FALLBACK_FAMILY: Record<string, Family> = { trains: 'rail', rail: 'rail', aprs: 'ham', survey: 'bcast', spectrum: 'bcast', acars: 'air', uat: 'air' };
 
 /**
- * The header loop and the stats in one band: one tile per slot, in loop order. The slot on air grows
- * into a larger card with the frequency, countdown and progress; the others show today's number, one
- * line worth reading, and when they're next on air. Clicking a tile filters the feed to that source.
+ * The header: the Airwaves mark with one chip per family that isn't on air (its headline number), then the family
+ * on air opened into a card: the frequency, the slot and its countdown, every slot of that family with today's
+ * number, and what's up next. Chips and slot tiles filter the feed.
  */
 export function LoopBand({ snapshot, start, end }: { snapshot?: Snapshot; start?: ReactNode; end?: ReactNode }) {
   const rot = snapshot?.rotation;
@@ -19,77 +23,118 @@ export function LoopBand({ snapshot, start, end }: { snapshot?: Snapshot; start?
   const idx = rot?.index ?? -1;
   const ids = rot?.slots?.length ? rot.slots : [...new Set(loop.map((l) => l.sourceId))];
   if (ids.length === 0 && cur) ids.push(cur.sourceId);
-  // Between one slot ending and the next starting: shimmer on the finishing tile, pulse on the next.
+  const familyOf = (id: string): Family => snapshot?.sources.find((s) => s.id === id)?.family ?? FALLBACK_FAMILY[id] ?? 'bcast';
+  const nameOf = (id: string) => rot?.names?.[id] ?? snapshot?.sources.find((s) => s.id === id)?.name ?? slotName(id);
+  const isBeta = (id: string) => rot?.beta?.includes(id) ?? false;
+  const stat = (id: string) => snapshot?.slotStats?.[id];
+
   const switching = rot?.mode === 'rotating' && !!cur?.endsAt && now >= cur.endsAt && now < cur.endsAt + SWITCH_GAP_MS * 2;
-  const nextId = loop.length && idx >= 0 ? loop[(idx + 1) % loop.length]?.sourceId : undefined;
   const left = cur?.endsAt ? Math.max(0, (cur.endsAt - now) / 1000) : 0;
   const progress = cur?.endsAt ? Math.min(1, Math.max(0, (now - cur.since) / (cur.endsAt - cur.since))) : 1;
+  const onFamily = cur ? familyOf(cur.sourceId) : undefined;
+
+  const families = FAMILY_ORDER.map((f) => ({ f, slots: ids.filter((id) => familyOf(id) === f) })).filter((x) => x.slots.length);
+  const typesOf = (slots: string[]) => [...new Set(slots.flatMap((id) => SOURCE_TYPES[id] ?? []))];
+
+  // Up next: the following three entries of this pass, with when each starts.
+  const next: { id: string; inS: number }[] = [];
+  if (loop.length && idx >= 0 && cur?.endsAt) {
+    let t = cur.endsAt + SWITCH_GAP_MS;
+    for (let k = 1; k <= Math.min(3, loop.length - 1); k++) {
+      const e = loop[(idx + k) % loop.length];
+      next.push({ id: e.sourceId, inS: Math.max(0, (t - now) / 1000) });
+      t += e.minutes * 60_000 + SWITCH_GAP_MS;
+    }
+  }
+
+  const chip = (f: Family, slots: string[]) => {
+    const head = slots.map(stat).find((s) => s?.value !== undefined && s.value !== '');
+    const types = typesOf(slots);
+    const label = `${FAMILY_LABEL[f]}: ${slots.map((id) => `${nameOf(id)} ${stat(id)?.value ?? '—'}`).join(', ')}`;
+    return (
+      <button key={f} type="button" className="fam" style={{ ['--c' as string]: FAMILY_COLOR[f] }} title={types.length ? `${label}. Show only these in the feed` : label} aria-label={label} onClick={() => types.length && showOnlyTypes(types)}>
+        <span className="dot" aria-hidden="true" />
+        {FAMILY_LABEL[f]}
+        {head && <span className="n">{head.value}</span>}
+        {slots.some(isBeta) && <span className="beta" aria-hidden="true">β</span>}
+      </button>
+    );
+  };
+
+  const onSlots = onFamily ? families.find((x) => x.f === onFamily)?.slots ?? [] : [];
+  const color = onFamily ? FAMILY_COLOR[onFamily] : 'var(--muted)';
 
   return (
     <section className="loopband" aria-label="What the radio is listening to, and what it has heard today">
-      {start}
-      {end}
-      <i className="lb-break" aria-hidden="true" />
-      {ids.map((id) => {
-        const so = snapshot?.sources.find((s) => s.id === id);
-        const name = rot?.names?.[id] ?? so?.name ?? slotName(id);
-        // Beta slots are exploratory: on the loop so you can see them run, knowingly not wired to the feed or map.
-        const beta = rot?.beta?.includes(id) ?? false;
-        const color = beta ? 'var(--muted)' : so ? FAMILY_COLOR[so.family] : 'var(--muted)';
-        const stat = snapshot?.slotStats?.[id];
-        const active = cur?.sourceId === id;
-        const when = active ? (rot?.mode === 'continuous' ? 'listening' : `${clock(left)} left`) : '';
-        const quiet = !active && (stat?.value === '0' || stat?.value === undefined) && id !== 'spectrum';
-        const clickable = !beta && !!SOURCE_TYPES[id];
-        return (
-          <div
-            key={id}
-            className={`lt${beta ? ' beta' : ''}${active ? ' now' : ''}${active && switching ? ' switching-out' : ''}${!active && switching && id === nextId ? ' next' : ''}${quiet ? ' quiet' : ''}${clickable ? ' click' : ''}`}
-            style={{ ['--c' as string]: color }}
-            title={beta ? `${name} (beta): scanning to learn what's here; not decoded into the feed or map yet` : clickable ? `Show only ${name} in the feed` : name}
-            {...(clickable && {
-              role: 'button',
-              tabIndex: 0,
-              onClick: () => showOnlySource(id),
-              onKeyDown: (e: React.KeyboardEvent) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  showOnlySource(id);
-                }
-              },
-            })}
-          >
-            <div className="lt-head">
-              <span className="lt-name">{name}</span>
-              {beta && <span className="lt-beta">beta</span>}
-              {active && (
-                <span className="lt-live">
-                  <span className="dot" style={{ background: 'var(--live)' }} />
-                  on air
-                </span>
-              )}
-              {active && cur && <span className="lt-freq">{cur.freqMhz.toFixed(3)} <small>MHz</small></span>}
-            </div>
-            <div className="lt-val">
-              {(stat?.value !== undefined || !stat) && <span className="v">{stat?.value ?? '—'}</span>}
-              <span className="k">{active ? stat?.label : stat?.short ?? stat?.label}</span>
-            </div>
-            <div className="lt-detail">{(active ? stat?.detail : stat?.brief ?? stat?.detail) ?? '\u00a0'}</div>
-            {active && (
-              <div className="lt-when">
+      <div className="lb-head">
+        {start}
+        <div className="lb-chips">{families.filter((x) => x.f !== onFamily).map((x) => chip(x.f, x.slots))}</div>
+        {end}
+      </div>
+      {cur && (
+        <div className={`onair${switching ? ' switching-out' : ''}`} style={{ ['--c' as string]: color }}>
+          <div className="onair-top">
+            <span className="onair-freq">{cur.freqMhz.toFixed(3)}</span>
+            <span className="muted">MHz</span>
+            <span className="onair-chip">
+              <span className="dot" style={{ background: 'var(--live)' }} aria-hidden="true" />
+              {nameOf(cur.sourceId)}
+              {isBeta(cur.sourceId) && <span className="beta">beta</span>}
+              <span className="muted">
+                ·{' '}
                 {switching ? (
                   <span className="switching" role="status">
                     switching<span className="dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>
                   </span>
+                ) : rot?.mode === 'continuous' ? (
+                  'listening'
                 ) : (
-                  when
+                  `${clock(left)} left`
                 )}
-              </div>
-            )}
-            {active && cur?.endsAt && <div className="lt-prog" style={{ width: `${progress * 100}%` }} />}
+              </span>
+            </span>
           </div>
-        );
-      })}
+          <div className="onair-slots">
+            {onSlots.map((id) => {
+              const s = stat(id);
+              const active = id === cur.sourceId;
+              const beta = isBeta(id);
+              const clickable = !beta && !!SOURCE_TYPES[id];
+              const body = (
+                <>
+                  <span className="k">
+                    {nameOf(id)}
+                    {beta ? ' · beta' : ''}
+                  </span>
+                  <span className="v">{s?.value ?? '—'}</span>
+                  <span className="d">{active ? s?.detail ?? s?.label ?? 'on air' : s?.brief ?? s?.short ?? s?.label ?? ' '}</span>
+                </>
+              );
+              const cls = `slot${active ? ' now' : ''}${beta ? ' is-beta' : ''}`;
+              return clickable ? (
+                <button key={id} type="button" className={cls} onClick={() => showOnlySource(id)} title={`Show only ${nameOf(id)} in the feed`}>
+                  {body}
+                </button>
+              ) : (
+                <div key={id} className={cls} title={beta ? `${nameOf(id)} (beta): scanning to learn what's here; not decoded into the feed or map yet` : nameOf(id)}>
+                  {body}
+                </div>
+              );
+            })}
+          </div>
+          {next.length > 0 && (
+            <div className="onair-next">
+              <span className="lbl">Up next</span>
+              {next.map((n, i) => (
+                <span key={`${n.id}-${i}`} className="next" style={{ ['--c' as string]: FAMILY_COLOR[familyOf(n.id)] }}>
+                  <b>{nameOf(n.id)}</b> {clock(n.inS)}
+                </span>
+              ))}
+            </div>
+          )}
+          {cur.endsAt && <div className="onair-prog" style={{ width: `${progress * 100}%` }} />}
+        </div>
+      )}
     </section>
   );
 }

@@ -235,55 +235,50 @@ button.ftoken { font: inherit; font-size: 12px; cursor: pointer; padding: 3px 10
 .nav-card .muted { font-size: 11px; }
 .nav-card .alert { color: #ff7a7a; font-weight: 600; }
 
-/* Loop band: one tile per slot; the one on air grows into a hero card */
-/* Brand and buttons live at the two ends of the loop band (no separate header row) */
+/* Header: the Airwaves mark, chips for the families not on air, then the family on air opened into a card */
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.lb-brand { order: -2; flex: none; display: flex; flex-direction: column; justify-content: center; gap: 4px; padding: 2px 6px 2px 2px; }
-.lb-title { font-size: 13px; font-weight: 600; letter-spacing: -.01em; }
-.lb-status { font-size: 10px; color: var(--muted); max-width: 80px; }
-.lb-end { order: 99; flex: none; display: flex; flex-direction: column; justify-content: center; gap: 6px; }
-.lb-break { display: none; }
-.loopband { display: flex; gap: 8px; }
-.lt { position: relative; flex: 1 1 0; min-width: 0; padding: 10px 12px; border-radius: 12px; background: var(--card); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 1px; overflow: hidden; transition: flex-grow .6s ease, background .4s, border-color .4s, opacity .4s; }
-.lt.now { flex-grow: 2.6; border-color: var(--c); background: color-mix(in srgb, var(--c) 9%, var(--card)); }
-.lt.quiet { opacity: .5; }
-.lt.click { cursor: pointer; }
-.lt.click:hover { border-color: var(--line-strong); }
-.lt.now.click:hover { border-color: var(--c); }
-.lt.click:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
-.lt-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.lt-name { font-size: 12px; font-weight: 600; color: var(--c); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lt-live { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 10px; color: var(--live); white-space: nowrap; }
-.lt-freq { margin-left: auto; font-family: var(--mono); font-size: 15px; font-weight: 500; white-space: nowrap; }
-.lt-freq small { font-size: 10px; color: var(--muted); font-weight: 400; }
-.lt-val { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
-.lt-val .v { font-family: var(--mono); font-size: 20px; font-weight: 500; color: var(--text); transition: font-size .6s ease; }
-.lt.now .lt-val .v { font-size: 26px; }
-.lt-val .k { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lt-detail { font-size: 11px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lt.now .lt-detail { font-size: 12px; }
-.lt-when { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 3px; white-space: nowrap; }
-.lt.now .lt-when { color: var(--text-2); }
-.lt-prog { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--c); transition: width 1s linear; }
-@media (max-width: 1100px) {
-  .loopband { flex-wrap: wrap; }
-  /* Brand and buttons share the first row; tiles start on the next */
-  .lb-brand { flex-direction: row; align-items: center; gap: 8px; }
-  .lb-end { order: -1; flex-direction: row; margin-left: auto; }
-  .lb-break { display: block; order: -1; flex-basis: 100%; height: 0; }
-  .lt { flex: 1 1 calc(25% - 8px); }
-  .lt.now { flex-basis: 100%; }
+.loopband { display: flex; flex-direction: column; gap: 10px; }
+.lb-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.lb-brand { flex: none; display: flex; align-items: center; gap: 8px; }
+.lb-title { font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+.lb-status { font-size: 11px; color: var(--muted); }
+.lb-end { flex: none; display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.lb-chips { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.fam { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 11px; border-radius: 999px; background: var(--card); border: 1px solid var(--line); color: var(--text-2); font: 500 12px var(--sans, inherit); white-space: nowrap; cursor: pointer; }
+.fam:hover { border-color: var(--line-strong); }
+.fam:focus-visible, .slot:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+.fam .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c); }
+.fam .n { font-family: var(--mono); color: var(--text); }
+.beta { font-size: 9px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); border: 1px dashed var(--line-strong); border-radius: 4px; padding: 0 4px; line-height: 14px; }
+.onair { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 10px; padding: 14px 18px 16px; border-radius: 14px; background: var(--card); border: 1px solid var(--line); }
+.onair-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.onair-freq { font-family: var(--mono); font-size: 32px; font-weight: 500; letter-spacing: -.02em; line-height: 1; }
+.onair-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border-radius: 999px; background: var(--raised); border: 1px solid var(--line-strong); font-size: 12px; font-weight: 500; color: var(--c); }
+.onair-chip .dot { width: 7px; height: 7px; border-radius: 50%; }
+.onair-slots { display: flex; flex-wrap: wrap; gap: 8px; }
+.slot { display: flex; flex-direction: column; gap: 1px; min-width: 110px; padding: 8px 12px; border-radius: 10px; background: var(--raised); border: 1px solid var(--line); text-align: left; font: inherit; color: inherit; }
+button.slot { cursor: pointer; }
+button.slot:hover { border-color: var(--line-strong); }
+.slot.now { border-color: var(--c); background: color-mix(in srgb, var(--c) 10%, var(--raised)); }
+.slot.is-beta { border-style: dashed; }
+.slot .k { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; font-weight: 600; color: var(--c); white-space: nowrap; }
+.slot .v { font-family: var(--mono); font-size: 18px; font-weight: 500; color: var(--text); }
+.slot .d { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.slot.now .d { color: var(--text-2); }
+.onair-next { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 12px; color: var(--muted); }
+.onair-next .next b { color: var(--c); font-weight: 500; }
+.onair-prog { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--live); transition: width 1s linear; }
+.onair.switching-out::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, #ffffff14, transparent); transform: translateX(-100%); animation: sw-shimmer 1.4s ease-in-out infinite; pointer-events: none; }
+@media (max-width: 720px) {
+  /* Phone: the mark and buttons on one line, the family chips in a swipeable row under it */
+  .lb-head { flex-wrap: wrap; }
+  .lb-chips { order: 3; flex-basis: 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-mask-image: linear-gradient(90deg, #000 88%, transparent); mask-image: linear-gradient(90deg, #000 88%, transparent); padding-bottom: 2px; }
+  .lb-chips::-webkit-scrollbar { display: none; }
+  .onair { padding: 12px 14px 14px; }
+  .onair-freq { font-size: 26px; }
+  .slot { min-width: 0; flex: 1 1 calc(50% - 8px); }
 }
-@media (max-width: 560px) {
-  .lt { flex-basis: calc(50% - 8px); }
-}
-/* Switching: shimmer across the finishing tile, the next one pulses */
-.lt.switching-out::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, #ffffff1f, transparent); transform: translateX(-100%); animation: sw-shimmer 1.4s ease-in-out infinite; pointer-events: none; }
-.lt.next { animation: sw-pulse 1.2s ease-in-out infinite; border-color: var(--c); }
 @media (prefers-reduced-motion: reduce) {
-  .lt, .lt-val .v { transition: none; }
-  .lt.switching-out::after, .lt.next { animation: none; }
+  .onair-prog { transition: none; }
+  .onair.switching-out::after { animation: none; }
 }
-/* Beta (exploratory) slots in the loop band: dashed and muted, with a small tag. */
-.lt.beta { border-style: dashed; }
-.lt-beta { font-size: 9px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 4px; line-height: 14px; flex: none; }
