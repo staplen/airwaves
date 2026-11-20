@@ -105,6 +105,7 @@ const config: Config = JSON.parse(readFileSync(SLOTS_FILE, 'utf8'));
 const allSlots = config.slots;
 const docker = new Docker(DOCKER_SOCKET);
 const failures: Record<string, { at: number; reason: string }> = {};
+const slotLogs: Record<string, { at: number; lines: string[] }> = {}; // last output of each slot's decoder, for debugging quiet slots
 
 let mqtt: MqttClient | undefined;
 if (env.MQTT_URL) {
@@ -163,6 +164,7 @@ function publish(loop: Slot[], index: number, since: number, endsAt: number) {
     beta: [...new Set(allSlots.filter((x) => x.beta).map((x) => x.id))],
     names: Object.fromEntries(allSlots.map((x) => [x.id, x.name.replace(/\s*\((?:night|deep|weekly|locomotive|beta)\)$/i, '')]).reverse()),
     failures,
+    slotLogs,
     loop: loop.map((x) => ({ slotId: x.id, minutes: x.minutes, freqMhz: x.freqMhz })),
     index,
     loopMinutes: loop.reduce((a, x) => a + x.minutes, 0),
@@ -206,6 +208,9 @@ async function stopSlot(s: Slot) {
   if (DRY_RUN) return log(`[dry run] stop ${s.id}`);
   if (s.existing) return docker.stop(s.existing, 10);
   const name = containerName(s);
+  // Keep the decoder's last words before the container goes (slots that hear nothing exit cleanly and leave no failure).
+  const out = await docker.logs(name, 15).catch(() => '');
+  if (out) slotLogs[s.id] = { at: Date.now(), lines: out.split('\n').map((l) => l.replace(/[\x00-\x08\x0e-\x1f]/g, '').slice(0, 200)).filter(Boolean).slice(-15) };
   await docker.stop(name, 3); // every decoder exits within a second or two of SIGTERM; don't idle the dongle longer
   await docker.remove(name); // the dongle is free only once the container is gone
   await docker.waitGone(name);

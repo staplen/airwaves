@@ -133,6 +133,7 @@ export interface SchedulerState {
   beta?: string[]; // slot ids that are exploratory: scanning, not (yet) decoded into the feed or map
   names?: Record<string, string>; // display name per slot id
   failures?: Record<string, { at: number; reason: string }>; // last failure per slot
+  slotLogs?: Record<string, { at: number; lines: string[] }>; // last lines each slot's decoder printed
   loop?: { slotId: string; minutes: number; freqMhz?: number }[]; // this pass's slots in order (ids can repeat)
   index?: number; // position of the running slot in `loop`
   loopMinutes: number;

@@ -840,6 +840,12 @@ const server = createServer((req, res) => {
     res.end(JSON.stringify(currentSpectrum()));
     return;
   }
+  if (p === '/api/slotlogs') {
+    // LAN only: the last lines each decoder printed (decoder output can name hosts or devices).
+    if (isPublic(req)) return void res.writeHead(403).end();
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(scheduler?.slotLogs ?? {}));
+    return;
+  }
   if (p === '/api/survey') {
     // Beta: channels the fine sweeps keep finding (frequencies only, nothing decoded).
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ surveys: survey.surveys, channels: surveyReport(survey) }));
@@ -894,6 +900,7 @@ async function ingestFiles() {
   }
   if (await ingestAprsFiles(APRS_DIR, onAprs)) heard('aprs', now);
   const bursts = await ingestTrains(TRAINS_DIR);
+  if (bursts.length) heard('trains', now);
   if (bursts.length) {
     const d = localDay(now);
     if (trainsToday.day !== d) trainsToday = { day: d, bursts: 0, units: [] };
