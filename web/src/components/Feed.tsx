@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Family, FeedItem } from '../../../shared/types.ts';
 import { FAMILY_COLOR, FAMILY_LABEL } from '../bands.ts';
+import { BundleCard, bundleRows } from './Bundle.tsx';
 import { ClipPlayer } from './ClipPlayer.tsx';
 import { onShowOnly } from '../feedFilter.ts';
 
@@ -173,6 +174,39 @@ export function Feed({ items }: { items: FeedItem[] }) {
   const onNames = onTypes.map((t) => t.label);
   const menuOpen = open && !typesOpen && opts.length > 0;
 
+  const card = (i: FeedItem) => (
+      <article key={i.id} className="card catch">
+        <div className="bar" style={{ background: FAMILY_COLOR[i.family] }} />
+        {i.image && !i.clip && <img className="catch-art" src={i.image} alt="" loading="lazy" width={56} height={56} />}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="catch-head">
+            <span className="catch-kind" style={{ color: FAMILY_COLOR[i.family] }}>{highlight(i.kind, words)}</span>
+            <b style={{ fontSize: 13 }}>{highlight(i.title, words)}</b>
+            <span className="mono muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{highlight(metaLine(i), words)}</span>
+          </div>
+          {i.body && !PLACEHOLDER.test(i.body) && (
+            <div className={i.mono ? 'catch-body mono' : 'catch-body'} style={i.tag === 'Station message' ? { color: 'var(--muted)' } : undefined}>
+              {i.tag && <span className="catch-tag">{i.tag}</span>}
+              {highlight(i.body, words)}
+            </div>
+          )}
+          {i.raw && (
+            <details className="raw">
+              <summary>Original message</summary>
+              <code>{i.raw}</code>
+            </details>
+          )}
+          {i.clip && Date.now() - i.ts < CLIP_RETENTION_MS && (
+            <div className="clip-row">
+              {i.image && <img className="clip-art" src={i.image} alt="" loading="lazy" width={52} height={52} />}
+              <ClipPlayer src={i.clip} color={FAMILY_COLOR[i.family]} label={`${i.title} clip`} />
+            </div>
+          )}
+          {i.clip && Date.now() - i.ts >= CLIP_RETENTION_MS && <span className="muted" style={{ fontSize: 12 }}>Clip expired (audio is kept for 24 hours)</span>}
+        </div>
+      </article>
+  );
+
   return (
     <section className="feed" aria-label="Feed">
       <div className="fsearch" ref={root}>
@@ -277,38 +311,7 @@ export function Feed({ items }: { items: FeedItem[] }) {
             {filtered && <button type="button" className="empty-clear" onClick={clearAll}>Show everything</button>}
           </div>
         )}
-        {shown.map((i) => (
-          <article key={i.id} className="card catch">
-            <div className="bar" style={{ background: FAMILY_COLOR[i.family] }} />
-            {i.image && !i.clip && <img className="catch-art" src={i.image} alt="" loading="lazy" width={56} height={56} />}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="catch-head">
-                <span className="catch-kind" style={{ color: FAMILY_COLOR[i.family] }}>{highlight(i.kind, words)}</span>
-                <b style={{ fontSize: 13 }}>{highlight(i.title, words)}</b>
-                <span className="mono muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{highlight(metaLine(i), words)}</span>
-              </div>
-              {i.body && !PLACEHOLDER.test(i.body) && (
-                <div className={i.mono ? 'catch-body mono' : 'catch-body'} style={i.tag === 'Station message' ? { color: 'var(--muted)' } : undefined}>
-                  {i.tag && <span className="catch-tag">{i.tag}</span>}
-                  {highlight(i.body, words)}
-                </div>
-              )}
-              {i.raw && (
-                <details className="raw">
-                  <summary>Original message</summary>
-                  <code>{i.raw}</code>
-                </details>
-              )}
-              {i.clip && Date.now() - i.ts < CLIP_RETENTION_MS && (
-                <div className="clip-row">
-                  {i.image && <img className="clip-art" src={i.image} alt="" loading="lazy" width={52} height={52} />}
-                  <ClipPlayer src={i.clip} color={FAMILY_COLOR[i.family]} label={`${i.title} clip`} />
-                </div>
-              )}
-              {i.clip && Date.now() - i.ts >= CLIP_RETENTION_MS && <span className="muted" style={{ fontSize: 12 }}>Clip expired (audio is kept for 24 hours)</span>}
-            </div>
-          </article>
-        ))}
+        {bundleRows(shown).map((r) => (r.items.length === 1 ? card(r.items[0]) : <BundleCard key={r.key} items={r.items} />))}
       </div>
     </section>
   );

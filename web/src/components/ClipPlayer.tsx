@@ -28,8 +28,11 @@ function fmt(s: number): string {
   return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
 }
 
-export function ClipPlayer({ src, color, label, compact }: { src: string; color: string; label: string; compact?: boolean }) {
+/** `onEnded` fires when the clip finishes; `autoPlay` starts it on mount (used to chain a bundle's clips). */
+export function ClipPlayer({ src, color, label, compact, onEnded, autoPlay }: { src: string; color: string; label: string; compact?: boolean; onEnded?: () => void; autoPlay?: boolean }) {
   const audio = useRef<HTMLAudioElement>(null);
+  const ended = useRef(onEnded);
+  ended.current = onEnded;
   const [isPlaying, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -64,6 +67,7 @@ export function ClipPlayer({ src, color, label, compact }: { src: string; color:
     const onEnd = () => {
       stop();
       setProgress(0);
+      ended.current?.();
     };
     const onMeta = () => setDuration(knownDuration());
     a.addEventListener('play', onPlay);
@@ -81,15 +85,23 @@ export function ClipPlayer({ src, color, label, compact }: { src: string; color:
     };
   }, []);
 
+  const start = () => {
+    const a = audio.current;
+    if (!a || !a.paused) return;
+    if (playing && playing !== a) playing.pause();
+    playing = a;
+    void a.play().catch(() => {});
+  };
   const toggle = () => {
     const a = audio.current;
     if (!a) return;
-    if (a.paused) {
-      if (playing && playing !== a) playing.pause();
-      playing = a;
-      void a.play();
-    } else a.pause();
+    if (a.paused) start();
+    else a.pause();
   };
+  useEffect(() => {
+    if (autoPlay) start(); // idempotent: safe if effects run twice
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const seek = (e: React.MouseEvent<HTMLDivElement>) => {
     const a = audio.current;
