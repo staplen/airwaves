@@ -106,8 +106,8 @@
       "env": ["HD_STATIONS=98.7:0 99.5:0 101.1:0", "HD_SNIPPET_SEC=12", "HD_SWEEP_MAX_SEC=20", "HD_DWELL_SEC=180"]
     },
     {
-      "id": "uat", "name": "UAT", "freqMhz": 978, "minutes": 1,
-      "comment": "978 MHz UAT: small planes that don't use 1090 (to the map), and FIS-B ground stations (positions; the broadcasts are logged raw for now).",
+      "id": "uat", "name": "UAT (beta)", "freqMhz": 978, "minutes": 1, "beta": true,
+      "comment": "BETA: 978 MHz UAT (small planes not on 1090, FIS-B ground stations). Decodes into the map when heard, but nothing has been received with the current antenna; beta until it hears something (or the attic 1090/978 antenna).",
       "image": "ghcr.io/sdr-enthusiasts/docker-dump978:latest-build-816",
       "entrypoint": ["dump978-fa"],
       "cmd": ["--sdr", "driver=rtlsdr", "--sdr-gain", "49.6", "--json-port", "30979", "--raw-port", "30978"]

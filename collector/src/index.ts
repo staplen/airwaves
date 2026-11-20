@@ -106,7 +106,7 @@ const sondes = new SondeTracker();
 const tracks = new TrackStore(); // 24 h of positions for the map's contrails
 const uat = new UatState(); // 978 MHz aircraft and FIS-B ground stations
 const aprs = new AprsState(); // 144.39 MHz stations
-let survey: SurveyState = { surveys: {}, channels: {} }; // beta: what the fine sweeps keep finding
+let survey: SurveyState = { v: 2, surveys: {}, channels: {} }; // beta: what the fine sweeps keep finding
 const dlNames = new Map<string, { name: string; ts: number }>(); // ICAO hex → flight/registration seen on datalink
 const DL_NAME_MS = 12 * 3600_000;
 const dlName = (hex: string, now: number) => {
@@ -1082,7 +1082,9 @@ function loadState() {
   adsb.home ??= store.getState('home');
   aprs.load(store.getState('aprs'), Date.now());
   for (const st of store.getState<{ lat: number; lon: number; frames: number; lastHeard: number }[]>('uatStations') ?? []) uat.stations.set(`${st.lat.toFixed(2)},${st.lon.toFixed(2)}`, st);
-  survey = store.getState<SurveyState>('survey') ?? survey;
+  // v2 drops TV spill and broadband signals: start over rather than keep what the first sweeps mislabelled.
+  const savedSurvey = store.getState<SurveyState & { v?: number }>('survey');
+  survey = savedSurvey?.v === 2 ? savedSurvey : { v: 2, surveys: {}, channels: {} };
   publicOffset = store.getState<Offset>('publicOffset');
   if (!publicOffset) {
     publicOffset = randomOffset();

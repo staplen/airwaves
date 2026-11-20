@@ -8,6 +8,10 @@ import { join } from 'node:path';
 
 const MIN_OVER_DB = 10; // above the band's floor
 const CHANNEL_HZ = 12_500;
+const MAX_WIDTH_BINS = 4; // wider than ~50 kHz above the threshold: broadband (TV, data), not a narrowband channel
+// Broadcast TV (VHF low/high, UHF) and its spill-over: strong, wide and already known; not what we're looking for.
+const TV_MHZ: [number, number][] = [[54, 88], [173.5, 216.5], [469.5, 608.5]];
+export const isTv = (mhz: number) => TV_MHZ.some(([lo, hi]) => mhz >= lo && mhz < hi);
 
 /** What a frequency is probably used for (US allocations near Washington, DC). */
 const BANDS: { lo: number; hi: number; use: string; note?: string }[] = [
@@ -40,7 +44,9 @@ const BANDS: { lo: number; hi: number; use: string; note?: string }[] = [
   { lo: 935.0, hi: 941.0, use: 'Railroad ATCS / business (900 MHz)' },
   { lo: 941.0, hi: 960.0, use: 'Fixed links / studio-transmitter' },
 ];
-export const bandOf = (mhz: number) => BANDS.find((b) => mhz >= b.lo && mhz < b.hi);
+// Narrowest match wins (railroad and AIS sit inside the marine band, paging inside land mobile…).
+const BY_WIDTH = [...BANDS].sort((a, b) => a.hi - a.lo - (b.hi - b.lo));
+export const bandOf = (mhz: number) => BY_WIDTH.find((b) => mhz >= b.lo && mhz < b.hi);
 
 export interface SurveyChannel {
   mhz: number; // channel centre (12.5 kHz grid)
@@ -53,6 +59,7 @@ export interface SurveyChannel {
   last: number;
 }
 export interface SurveyState {
+  v?: number; // format version (2: TV and broadband filtered)
   surveys: Record<string, number>; // band label → survey count
   channels: Record<string, SurveyChannel>; // key = channel MHz (3 decimals)
 }
@@ -87,7 +94,14 @@ export function findChannels(csv: string): { band: string; peaks: { mhz: number;
     if (over < MIN_OVER_DB) continue;
     const l = max.get(hz - CHANNEL_HZ) ?? -Infinity;
     const r = max.get(hz + CHANNEL_HZ) ?? -Infinity;
-    if (db >= l && db > r) peaks.push({ mhz: Math.round(hz / 1000) / 1000, overDb: Math.round(over * 10) / 10 });
+    if (!(db >= l && db > r) || isTv(hz / 1e6)) continue;
+    // How wide the signal is above the threshold: narrowband channels are 1–3 bins.
+    let width = 1;
+    // Measured at 15 dB down from the peak too, so a strong narrow signal's skirts don't count as width.
+    const edge = Math.max(floor + MIN_OVER_DB, db - 15);
+    for (const dir of [-1, 1]) for (let k = 1; k <= MAX_WIDTH_BINS && (max.get(hz + dir * k * CHANNEL_HZ) ?? -Infinity) >= edge; k++) width++;
+    if (width > MAX_WIDTH_BINS) continue;
+    peaks.push({ mhz: Math.round(hz / 1000) / 1000, overDb: Math.round(over * 10) / 10 });
   }
   return { band: `${(lo / 1e6).toFixed(0)}-${(hi / 1e6).toFixed(0)} MHz`, peaks: peaks.sort((a, b) => a.mhz - b.mhz) };
 }
@@ -136,7 +150,7 @@ export async function ingestSurvey(dir: string, state: SurveyState, onRaw?: (fil
 /** The interesting part: channels seen in more than one survey (or once, strongly), most regular first. */
 export function surveyReport(state: SurveyState) {
   return Object.values(state.channels)
-    .filter((c) => c.seen >= 2 || c.peakDb >= 20)
+    .filter((c) => !isTv(c.mhz) && (c.seen >= 2 || c.peakDb >= 20))
     .sort((a, b) => b.seen / b.surveys - a.seen / a.surveys || b.peakDb - a.peakDb)
     .slice(0, 300);
 }
