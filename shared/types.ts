@@ -46,6 +46,13 @@ export interface AisFixed {
 }
 
 /** A weather balloon (radiosonde) flight. */
+/** Recent positions for the map's fading contrails. */
+export type TrackKind = 'air' | 'dl' | 'sea';
+export interface Tracks {
+  now: number;
+  tracks: { id: string; kind: TrackKind; label?: string; pts: [number, number, number | null, number][] }[]; // lon, lat, alt ft | null, unix s
+}
+
 export interface Balloon {
   id: string; // serial number, e.g. S3420157
   model?: string;

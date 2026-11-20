@@ -4,10 +4,11 @@ import { Map as MlMap, Popup, setWorkerUrl, type GeoJSONSource } from 'maplibre-
 // Let Vite bundle the worker (with its shared chunk) and hand MapLibre the URL.
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { Aircraft, AisFixed, Balloon, Home, Overlays, Snapshot, Vessel } from '../../../shared/types.ts';
+import type { Aircraft, AisFixed, Balloon, Home, Overlays, Snapshot, Tracks, Vessel } from '../../../shared/types.ts';
 import { apiUrl, isStatic } from '../api.ts';
 import { ago } from '../live.ts';
 import { sitesFC } from '../sites.ts';
+import { AGE_OPACITY, TRAIL_COLOR, tracksFC } from '../trails.ts';
 
 const STYLE = 'https://tiles.openfreemap.org/styles/dark';
 // Absolute, because the build uses a relative base and the worker must resolve against the page.
@@ -135,19 +136,25 @@ function vesselsFC(list: Vessel[], fixed: AisFixed[], now: number): FC {
 
 function balloonsFC(list: Balloon[]): FC {
   const features: GeoJSON.Feature[] = [];
+  const now = Date.now();
   for (const b of list) {
-    if (b.track.length > 1) features.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: b.track }, properties: {} });
+    // Flights stay on the map for two days, fading once they're no longer heard.
+    const ageH = (now - b.lastSeen) / 3600_000;
+    const op = ageH < 1 ? 1 : ageH < 6 ? 0.55 : ageH < 24 ? 0.3 : 0.15;
+    if (b.track.length > 1) features.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: b.track }, properties: { op } });
+    if (ageH >= 6) continue; // old flights: just the track
     const arrow = b.vertMps !== undefined && b.vertMps < 0 ? '↓' : '↑';
     features.push({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [b.lon, b.lat] },
-      properties: { label: `${b.id} · ${(b.altM / 1000).toFixed(1)} km ${arrow}${b.burst ? ' · burst' : ''}` },
+      properties: { op, label: `${b.id} · ${(b.altM / 1000).toFixed(1)} km ${arrow}${b.burst ? ' · burst' : ''}${ageH >= 1 ? ` · ${Math.round(ageH)} h ago` : ''}` },
     });
   }
   return { type: 'FeatureCollection', features };
 }
 
 const OVERLAY_REFRESH_MS = 5 * 60_000;
+const TRACKS_REFRESH_MS = 60_000;
 type Layer = 'live' | 'traffic' | 'weather';
 
 const TILE_PX = 200; // broadcast traffic tiles are 200 px squares
@@ -254,6 +261,8 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
   const centered = useRef(false);
   const [overlays, setOverlays] = useState<Overlays>({});
   const [layer, setLayer] = useState<Layer>('live');
+  const [tracks, setTracks] = useState<Tracks>();
+  const [trails, setTrails] = useState(true);
   const approx = useRef(false);
 
   useEffect(() => {
@@ -273,6 +282,9 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
       m.addSource('aircraft', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       m.addSource('balloons', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       m.addSource('sites', { type: 'geojson', data: sitesFC(undefined) });
+      m.addSource('trails', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      m.addLayer({ id: 'trails-line', type: 'line', source: 'trails', filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-cap': 'round' }, paint: { 'line-color': TRAIL_COLOR as never, 'line-width': ['interpolate', ['linear'], ['zoom'], 7, 1.2, 11, 2.2], 'line-opacity': AGE_OPACITY as never } });
+      m.addLayer({ id: 'trails-dot', type: 'circle', source: 'trails', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 1.8, 'circle-color': TRAIL_COLOR as never, 'circle-opacity': AGE_OPACITY as never } });
       m.addLayer({ id: 'rings', type: 'line', source: 'rings', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#3a4659', 'line-width': 1, 'line-dasharray': [2, 3] } });
       m.addLayer({ id: 'ring-labels', type: 'symbol', source: 'rings', filter: ['has', 'label'], layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 10, 'text-offset': [0, -0.8] }, paint: { 'text-color': '#8b93a1' } });
       m.addLayer({ id: 'home-halo', type: 'circle', source: 'rings', filter: ['has', 'home'], paint: { 'circle-radius': 14, 'circle-color': '#4ade80', 'circle-opacity': 0.15, 'circle-radius-transition': { duration: 0 }, 'circle-opacity-transition': { duration: 0 } } });
@@ -307,8 +319,8 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
         layout: { 'icon-image': 'ship', 'icon-size': 0.7, 'icon-rotate': ['get', 'cog'], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': true, 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 10, 'text-offset': [1.1, 0], 'text-anchor': 'left', 'text-optional': true },
         paint: { 'icon-color': '#3cc9b4', 'icon-opacity': ['case', ['get', 'stale'], 0.4, 1], 'text-color': '#3cc9b4', 'text-halo-color': '#0b0e13', 'text-halo-width': 1.2 },
       });
-      m.addLayer({ id: 'balloon-tracks', type: 'line', source: 'balloons', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#f5b547', 'line-width': 2, 'line-dasharray': [2, 2] } });
-      m.addLayer({ id: 'balloons', type: 'circle', source: 'balloons', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 6, 'circle-color': '#f5b547', 'circle-stroke-color': '#0b0e13', 'circle-stroke-width': 1.5 } });
+      m.addLayer({ id: 'balloon-tracks', type: 'line', source: 'balloons', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#f5b547', 'line-width': 2, 'line-dasharray': [2, 2], 'line-opacity': ['get', 'op'] } });
+      m.addLayer({ id: 'balloons', type: 'circle', source: 'balloons', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-opacity': ['get', 'op'], 'circle-radius': 6, 'circle-color': '#f5b547', 'circle-stroke-color': '#0b0e13', 'circle-stroke-width': 1.5 } });
       m.addLayer({ id: 'balloon-labels', type: 'symbol', source: 'balloons', filter: ['==', ['geometry-type'], 'Point'], layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 11, 'text-offset': [0.9, 0], 'text-anchor': 'left' }, paint: { 'text-color': '#f5b547', 'text-halo-color': '#0b0e13', 'text-halo-width': 1.2 } });
       // Transmitter sites: muted dots, pulsing while their frequency is on air.
       m.addLayer({ id: 'site-pulse', type: 'circle', source: 'sites', filter: ['==', ['get', 'on'], true], paint: { 'circle-radius': 6, 'circle-color': ['get', 'color'], 'circle-opacity': 0.3, 'circle-radius-transition': { duration: 0 }, 'circle-opacity-transition': { duration: 0 } } });
@@ -452,6 +464,31 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
     };
   }, []);
 
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      fetch(apiUrl('tracks') + (isStatic ? `?t=${Date.now()}` : ''))
+        .then((r) => (r.ok ? (r.json() as Promise<Tracks>) : undefined))
+        .catch(() => undefined)
+        .then((t) => alive && t && setTracks(t));
+    load();
+    const t = setInterval(load, TRACKS_REFRESH_MS);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+
+  // Redraw contrails when new tracks arrive, and every minute so they keep fading.
+  useEffect(() => {
+    const m = map.current;
+    if (!ready || !m) return;
+    const draw = () => (m.getSource('trails') as GeoJSONSource | undefined)?.setData(tracksFC(trails ? tracks : undefined));
+    draw();
+    const t = setInterval(draw, 60_000);
+    return () => clearInterval(t);
+  }, [ready, tracks, trails]);
+
   const now = snapshot?.now ?? Date.now();
   const adsb = snapshot?.sources.find((s) => s.id === 'adsb');
 
@@ -487,7 +524,9 @@ export function MapView({ snapshot }: { snapshot?: Snapshot }) {
               <span><b className="mono">{snapshot ? snapshot.stats.maxRangeNm.toFixed(0) : '—'}</b> <span className="muted">nm range</span></span>
               <span><b className="mono">{snapshot?.stats.avgRssi?.toFixed(0) ?? '—'}</b> <span className="muted">dBFS</span></span>
             </div>
-            <span className="muted" style={{ fontSize: 11 }}>Faded = not heard in the last {STALE_S} s</span>
+            <button type="button" className="tog" aria-pressed={trails} onClick={() => setTrails((v) => !v)} style={{ fontSize: 11 }}>
+              {trails ? 'Trails: last 24 h' : 'Trails off'}
+            </button>
           </div>
         </>
       )}

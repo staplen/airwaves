@@ -3,7 +3,7 @@ import { createSocket } from 'node:dgram';
 import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, extname, join, normalize } from 'node:path';
 import { connect as mqttConnect } from 'mqtt';
-import type { Aircraft, AisFixed, Balloon, FeedItem, Overlays, Pin, PinMetric, RadioStation, SchedulerState, SensorInfo, SlotStat, Snapshot, SourceStatus, SpectrumHeat, Vessel } from '../../shared/types.ts';
+import type { Aircraft, AisFixed, Balloon, FeedItem, Overlays, Pin, PinMetric, RadioStation, SchedulerState, SensorInfo, SlotStat, Snapshot, SourceStatus, SpectrumHeat, Tracks, Vessel } from '../../shared/types.ts';
 import { AdsbSource } from './adsb.ts';
 import { AisDecoder, shipTypeName } from './ais.ts';
 import { ClipWatcher, type Clip } from './clips.ts';
@@ -15,6 +15,7 @@ import { approxHome, randomOffset, type Offset } from './privacy.ts';
 import { readOverlays } from './overlays.ts';
 import { Publisher } from './publisher.ts';
 import { SondeTracker } from './sonde.ts';
+import { TrackStore } from './tracks.ts';
 import { RawTap, tryJson, vdl2Kind } from './rawtap.ts';
 import { describeSensor, parseRtl433 } from './rtl433.ts';
 import { Store, localDay } from './store.ts';
@@ -82,6 +83,7 @@ const lastHeard = new Map<string, number>();
 const vessels = new Map<number, Vessel>();
 const aisFixed = new Map<number, AisFixed>();
 const sondes = new SondeTracker();
+const tracks = new TrackStore(); // 24 h of positions for the map's contrails
 // Raw decoder output for the parsing audit (local network only, memory only): see /api/raw.
 const rawTap = new RawTap({
   rtl433: { perKind: 5, maxKinds: 80 }, // per rtl_433 model
@@ -148,7 +150,7 @@ function snapshot(): Snapshot {
     aircraft,
     vessels: [...vessels.values()].filter((v) => now - v.lastSeen < 3 * 3600_000),
     aisFixed: [...aisFixed.values()],
-    balloons: sondes.recent(now),
+    balloons: sondes.recent(now, 48 * 3600_000), // older flights stay on the map, fading
     atcHeard: Object.fromEntries(atcHeard),
     radio: [...radio.values()].sort((a, b) => Number(a.freq) - Number(b.freq) || a.program - b.program),
     totals: {
@@ -337,6 +339,7 @@ async function tick() {
     const day = localDay(now);
     // Audit sample: the most detailed aircraft object per position source, at most one a minute each.
     for (const a of [...adsb.raw].sort((x, y) => Object.keys(y).length - Object.keys(x).length)) rawTap.add('adsb', String(a.type ?? '?'), JSON.stringify(a), now);
+    for (const a of adsb.aircraft) if (a.seen < 15 && a.lat !== undefined && a.lon !== undefined) tracks.add('air', a.hex, a.lon, a.lat, typeof a.altBaro === 'number' ? a.altBaro : null, now - a.seen * 1000, a.flight);
     // Record each aircraft at most once a minute: a write per aircraft every 2 s wears the SD card.
     for (const a of adsb.aircraft) {
       if (now - (lastAircraftSave.get(a.hex) ?? 0) < 60_000) continue;
@@ -378,6 +381,7 @@ function onAisLine(line: string) {
     v.lon = m.lon;
   }
   if ('sog' in m && m.sog !== undefined) v.sog = m.sog;
+  if ('lat' in m && m.lat !== undefined && m.lon !== undefined) tracks.add('sea', String(m.mmsi), m.lon, m.lat, null, now, v.name);
   if ('cog' in m && m.cog !== undefined) v.cog = m.cog;
   vessels.set(m.mmsi, v);
   const { first } = store.sight(localDay(now), 'ship', String(m.mmsi), now);
@@ -401,6 +405,7 @@ function onVdl2(raw: string) {
   const c = parseVdl2(raw);
   if (!c) return;
   const key = c.flight ?? c.reg ?? c.title;
+  if (c.lat !== undefined && c.lon !== undefined) tracks.add('dl', key, c.lon, c.lat, c.altFt, c.ts, c.flight ?? c.reg);
   store.sight(localDay(c.ts), 'vdl2', key, c.ts);
   // At most one feed item per flight every 10 minutes, except controller datalink.
   const last = lastVdl2PerFlight.get(key) ?? 0;
@@ -614,6 +619,12 @@ const server = createServer((req, res) => {
     req.on('close', () => clients.delete(res));
     return;
   }
+  if (p === '/api/tracks') {
+    // The same data the public copy gets (no home location in it).
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(tracks.export()));
+    return;
+  }
   if (p === '/api/raw') {
     // Raw decoder samples for the parsing audit. Local network only: never from the public tunnel.
     if (isPublic(req)) {
@@ -730,6 +741,7 @@ function saveState() {
   store.setState('aisFixed', [...aisFixed.values()]);
   if (adsb.home) store.setState('home', adsb.home);
   store.setState('balloons', [...sondes.flights.values()]);
+  store.setState('tracks', tracks.export());
   store.setState('radio', [...radio.values()]);
   store.setState('sensors', [...sensors.values()]);
 }
@@ -748,7 +760,8 @@ function loadState() {
   for (const x of store.getState<SensorInfo[]>('sensors') ?? []) if (x.lastSeen > day) sensors.set(x.key, x);
   pins = store.getState<Pin[]>('pins') ?? [];
   trainsToday = store.getState<typeof trainsToday>('trainsToday') ?? trainsToday;
-  for (const b of store.getState<Balloon[]>('balloons') ?? []) if (b.lastSeen > day) sondes.flights.set(b.id, b);
+  for (const b of store.getState<Balloon[]>('balloons') ?? []) if (b.lastSeen > Date.now() - 3 * 86_400_000) sondes.flights.set(b.id, b);
+  tracks.load(store.getState<Tracks>('tracks'));
 }
 loadState();
 for (const sig of ['SIGTERM', 'SIGINT'] as const)
@@ -780,6 +793,7 @@ if (cleanEnv(env.PUBLISH_HOST)) {
     feed: () => store.recentFeedPerKind().map(publicItem),
     spectrum: currentSpectrum,
     overlays: currentOverlays,
+    tracks: () => tracks.export(),
   }).start();
 }
 

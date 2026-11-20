@@ -57,9 +57,9 @@ export class SondeTracker {
     return { kind: 'update', balloon: prev };
   }
 
-  /** Flights heard in the last `maxAgeMs`. */
+  /** Flights heard in the last `maxAgeMs`. Flights are forgotten after 3 days. */
   recent(now = Date.now(), maxAgeMs = 12 * 3600_000): Balloon[] {
-    for (const [k, b] of this.flights) if (now - b.lastSeen > 2 * maxAgeMs) this.flights.delete(k);
+    for (const [k, b] of this.flights) if (now - b.lastSeen > 3 * 86_400_000) this.flights.delete(k);
     return [...this.flights.values()].filter((b) => now - b.lastSeen < maxAgeMs);
   }
 }

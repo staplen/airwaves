@@ -8,6 +8,7 @@ import type { FeedItem, Overlays, RadioStation, Snapshot, SpectrumHeat } from '.
 const DAY_MS = 24 * 3600_000;
 const RETENTION_EVERY_MS = 10 * 60_000;
 const SPECTRUM_EVERY_MS = 10 * 60_000;
+const TRACKS_EVERY_MS = 3 * 60_000;
 const MEDIA_DIRS = ['clips/atc', 'clips/noaa', 'clips/radio', 'art', 'maps'];
 
 // ---- pure helpers (unit-tested) ---------------------------------------------------------------
@@ -166,6 +167,8 @@ export interface PublisherOptions {
   feed: () => FeedItem[];
   spectrum: () => SpectrumHeat;
   overlays: () => Overlays;
+  /** Recent positions for the map's contrails (uploaded every few minutes). */
+  tracks?: () => unknown;
 }
 
 export class Publisher {
@@ -179,6 +182,7 @@ export class Publisher {
   private seeded = false;
   private deployedVersion?: string;
   private lastSpectrum = 0;
+  private lastTracks = 0;
   private lastRetention = 0;
   private lastJson = new Map<string, string>(); // data file → last uploaded body
   private usePosixRename = true;
@@ -309,6 +313,10 @@ export class Publisher {
     if (now - this.lastSpectrum >= SPECTRUM_EVERY_MS) {
       await this.putJson(c, 'data/spectrum.json', this.opts.spectrum());
       this.lastSpectrum = now;
+    }
+    if (this.opts.tracks && now - this.lastTracks >= TRACKS_EVERY_MS) {
+      await this.putJson(c, 'data/tracks.json', this.opts.tracks());
+      this.lastTracks = now;
     }
     if (now - this.lastRetention >= RETENTION_EVERY_MS) {
       this.lastRetention = now;
