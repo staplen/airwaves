@@ -18,6 +18,7 @@ import { Publisher } from './publisher.ts';
 import { SondeTracker } from './sonde.ts';
 import { TrackStore } from './tracks.ts';
 import { RawTap, tryJson, vdl2Kind } from './rawtap.ts';
+import { RawLog } from './rawlog.ts';
 import { describeSensor, parseRtl433 } from './rtl433.ts';
 import { Store, localDay } from './store.ts';
 import { parseVdl2 } from './vdl2.ts';
@@ -34,6 +35,7 @@ const VDL2_UDP_PORT = Number(env.VDL2_UDP_PORT ?? 4101);
 const CLIPS_ROOT = env.CLIPS_ROOT; // folder holding atc/, noaa/ and radio/ clip folders
 // rtl_power sweeps land here; default is a "spectrum" folder next to DATA_DIR (/airwaves/spectrum on the Pi).
 const SPECTRUM_DIR = env.SPECTRUM_DIR ?? join(dirname(env.DATA_DIR ?? 'data'), 'spectrum');
+const RAW_DIR = env.RAW_DIR ?? join(dirname(env.DATA_DIR ?? 'data'), 'raw'); // durable raw decoder logs (hourly, 72 h)
 const TRAINS_DIR = env.TRAINS_DIR ?? join(dirname(env.DATA_DIR ?? 'data'), 'trains'); // train probe recordings + review/
 const HD_DIR = env.HD_DIR ?? join(dirname(env.DATA_DIR ?? 'data'), 'hdradio'); // nrsc5 logs + album art
 const ART_DIR = join(HD_DIR, 'art');
@@ -86,6 +88,13 @@ const aisFixed = new Map<number, AisFixed>();
 const sondes = new SondeTracker();
 const tracks = new TrackStore(); // 24 h of positions for the map's contrails
 // Raw decoder output for the parsing audit (local network only, memory only): see /api/raw.
+const rawLog = new RawLog(RAW_DIR).start();
+let lastAdsbRaw = 0;
+/** One raw decoder message: to the in-memory samples (/api/raw) and the durable hourly log files. */
+function logRaw(source: string, kind: string, text: string, ts = Date.now()) {
+  rawTap.add(source, kind, text, ts);
+  rawLog.write(source, kind, text, ts);
+}
 const rawTap = new RawTap({
   rtl433: { perKind: 5, maxKinds: 80 }, // per rtl_433 model
   ais: { perKind: 5, maxKinds: 30 }, // per AIS message type
@@ -340,6 +349,11 @@ async function tick() {
     const day = localDay(now);
     // Audit sample: the most detailed aircraft object per position source, at most one a minute each.
     for (const a of [...adsb.raw].sort((x, y) => Object.keys(y).length - Object.keys(x).length)) rawTap.add('adsb', String(a.type ?? '?'), JSON.stringify(a), now);
+    // The file log gets the whole aircraft list once a minute (every 2 s would be ~1 GB a day).
+    if (now - lastAdsbRaw >= 60_000) {
+      lastAdsbRaw = now;
+      rawLog.write('adsb', 'aircraft.json', JSON.stringify(adsb.raw), now);
+    }
     for (const a of adsb.aircraft) if (a.seen < 15 && a.lat !== undefined && a.lon !== undefined) tracks.add('air', a.hex, a.lon, a.lat, typeof a.altBaro === 'number' ? a.altBaro : null, now - a.seen * 1000, a.flight);
     // Record each aircraft at most once a minute: a write per aircraft every 2 s wears the SD card.
     for (const a of adsb.aircraft) {
@@ -361,7 +375,7 @@ const ais = new AisDecoder();
 function onAisLine(line: string) {
   const m = ais.push(line);
   if (!m) return;
-  rawTap.add('ais', `type ${m.type}`, line);
+  logRaw('ais', `type ${m.type}`, line);
   const now = Date.now();
   heard('ais', now);
   if (m.type === 21 && 'lat' in m && m.lat !== undefined && m.lon !== undefined) {
@@ -402,7 +416,7 @@ function announceShip(v: Vessel) {
 // ---- VDL2 (dumpvdl2 sends JSON over UDP) -------------------------------------------------
 function onVdl2(raw: string) {
   heard('vdl2');
-  rawTap.add('vdl2', vdl2Kind(raw), raw);
+  logRaw('vdl2', vdl2Kind(raw), raw);
   const c = parseVdl2(raw);
   if (!c) return;
   const key = c.flight ?? c.reg ?? c.title;
@@ -419,7 +433,7 @@ function onVdl2(raw: string) {
 const km = (m: number) => `${(m / 1000).toFixed(1)} km`;
 function onSonde(raw: string) {
   const j = tryJson(raw);
-  if (j) rawTap.add('sonde', String(j.callsign ?? j.type ?? '?'), raw);
+  if (j) logRaw('sonde', String(j.callsign ?? j.type ?? '?'), raw);
   const e = sondes.push(raw);
   if (!e) return;
   heard('sonde');
@@ -434,7 +448,7 @@ function onSonde(raw: string) {
 
 // ---- rtl_433 and NOAA alerts (MQTT) -------------------------------------------------------
 function onRtl433(raw: string) {
-  rawTap.add('rtl433', String(tryJson(raw)?.model ?? '?'), raw);
+  logRaw('rtl433', String(tryJson(raw)?.model ?? '?'), raw);
   const e = parseRtl433(raw);
   if (!e) return;
   heard('ism', e.ts);
@@ -473,7 +487,7 @@ function onRtl433(raw: string) {
 }
 
 function onEas(line: string) {
-  if (line.trim()) rawTap.add('eas', 'line', line);
+  if (line.trim()) logRaw('eas', 'line', line);
   heard('noaa');
   const a = parseSame(line);
   if (!a) return;
@@ -626,6 +640,20 @@ const server = createServer((req, res) => {
     res.end(JSON.stringify(tracks.export()));
     return;
   }
+  if (p === '/api/rawlog' || p.startsWith('/api/rawlog/')) {
+    // Durable raw logs: a listing, or one hourly file. Local network only.
+    if (isPublic(req)) {
+      res.writeHead(403).end();
+      return;
+    }
+    if (p === '/api/rawlog') {
+      void rawLog.list().then((files) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(files, null, 1)));
+      return;
+    }
+    if (serveFile(res, RAW_DIR, p.slice('/api/rawlog/'.length))) return;
+    res.writeHead(404).end();
+    return;
+  }
   if (p === '/api/raw') {
     // Raw decoder samples for the parsing audit. Local network only: never from the public tunnel.
     if (isPublic(req)) {
@@ -670,6 +698,8 @@ const server = createServer((req, res) => {
 // ---- housekeeping: bounded storage on the Pi ---------------------------------------------------
 async function housekeeping() {
   const now = Date.now();
+  const rl = await rawLog.rotate(now);
+  if (rl.deleted) console.log(`rawlog: ${rl.zipped} hours gzipped, ${rl.deleted} old files deleted`);
   const files = CLIPS_ROOT
     ? (await purgeOldFiles(join(CLIPS_ROOT, 'atc'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'noaa'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'radio'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'trains'), CLIP_RETENTION_MS, ['.wav']))
     : 0;
@@ -696,7 +726,7 @@ async function ingestFiles() {
   }
   mkdirSync(ART_DIR, { recursive: true });
   const radioClips = CLIPS_ROOT ? join(CLIPS_ROOT, 'radio') : undefined;
-  for (const c of await ingestHdRadio(HD_DIR, ART_DIR, radioClips, undefined, (name, text) => rawTap.add('hdradio', name.replace(/_\d{8}.*$/, ''), `${name}\n${text}`))) {
+  for (const c of await ingestHdRadio(HD_DIR, ART_DIR, radioClips, undefined, (name, text) => logRaw('hdradio', name.replace(/_\d{8}.*$/, ''), `${name}\n${text}`))) {
     heard('hdradio', c.ts);
     const key = `${c.freq}_${c.program}`;
     const prev = radio.get(key);
@@ -792,6 +822,7 @@ loadState();
 for (const sig of ['SIGTERM', 'SIGINT'] as const)
   process.on(sig, () => {
     saveState();
+    rawLog.flush();
     process.exit(0);
   });
 
