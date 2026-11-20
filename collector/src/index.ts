@@ -15,6 +15,7 @@ import { approxHome, randomOffset, type Offset } from './privacy.ts';
 import { readOverlays } from './overlays.ts';
 import { Publisher } from './publisher.ts';
 import { SondeTracker } from './sonde.ts';
+import { RawTap, tryJson, vdl2Kind } from './rawtap.ts';
 import { describeSensor, parseRtl433 } from './rtl433.ts';
 import { Store, localDay } from './store.ts';
 import { parseVdl2 } from './vdl2.ts';
@@ -81,6 +82,16 @@ const lastHeard = new Map<string, number>();
 const vessels = new Map<number, Vessel>();
 const aisFixed = new Map<number, AisFixed>();
 const sondes = new SondeTracker();
+// Raw decoder output for the parsing audit (local network only, memory only): see /api/raw.
+const rawTap = new RawTap({
+  rtl433: { perKind: 5, maxKinds: 80 }, // per rtl_433 model
+  ais: { perKind: 5, maxKinds: 30 }, // per AIS message type
+  vdl2: { perKind: 5, maxKinds: 80 }, // per ACARS label / frame kind
+  sonde: { perKind: 60, maxKinds: 10, minIntervalMs: 60_000 }, // per balloon, one frame a minute
+  eas: { perKind: 50, maxKinds: 1 },
+  hdradio: { perKind: 2, maxKinds: 12, maxChars: 200_000 }, // whole nrsc5 logs, per station
+  adsb: { perKind: 10, maxKinds: 10, minIntervalMs: 60_000 }, // per readsb position source (adsb_icao, mlat, tisb...)
+});
 const sensors = new Map<string, SensorInfo>(); // rtl_433 sensors by "<model>:<id>"
 let pins: Pin[] = []; // sensor readings shown with the top stats
 let scheduler: SchedulerState | undefined;
@@ -322,6 +333,8 @@ async function tick() {
   const now = Date.now();
   if (ok) {
     const day = localDay(now);
+    // Audit sample: the most detailed aircraft object per position source, at most one a minute each.
+    for (const a of [...adsb.raw].sort((x, y) => Object.keys(y).length - Object.keys(x).length)) rawTap.add('adsb', String(a.type ?? '?'), JSON.stringify(a), now);
     // Record each aircraft at most once a minute: a write per aircraft every 2 s wears the SD card.
     for (const a of adsb.aircraft) {
       if (now - (lastAircraftSave.get(a.hex) ?? 0) < 60_000) continue;
@@ -342,6 +355,7 @@ const ais = new AisDecoder();
 function onAisLine(line: string) {
   const m = ais.push(line);
   if (!m) return;
+  rawTap.add('ais', `type ${m.type}`, line);
   const now = Date.now();
   heard('ais', now);
   if (m.type === 21 && 'lat' in m && m.lat !== undefined && m.lon !== undefined) {
@@ -381,6 +395,7 @@ function announceShip(v: Vessel) {
 // ---- VDL2 (dumpvdl2 sends JSON over UDP) -------------------------------------------------
 function onVdl2(raw: string) {
   heard('vdl2');
+  rawTap.add('vdl2', vdl2Kind(raw), raw);
   const c = parseVdl2(raw);
   if (!c) return;
   const key = c.flight ?? c.reg ?? c.title;
@@ -395,6 +410,8 @@ function onVdl2(raw: string) {
 // ---- weather balloons (radiosonde_auto_rx payload summaries over UDP) -----------------------
 const km = (m: number) => `${(m / 1000).toFixed(1)} km`;
 function onSonde(raw: string) {
+  const j = tryJson(raw);
+  if (j) rawTap.add('sonde', String(j.callsign ?? j.type ?? '?'), raw);
   const e = sondes.push(raw);
   if (!e) return;
   heard('sonde');
@@ -409,6 +426,7 @@ function onSonde(raw: string) {
 
 // ---- rtl_433 and NOAA alerts (MQTT) -------------------------------------------------------
 function onRtl433(raw: string) {
+  rawTap.add('rtl433', String(tryJson(raw)?.model ?? '?'), raw);
   const e = parseRtl433(raw);
   if (!e) return;
   heard('ism', e.ts);
@@ -447,6 +465,7 @@ function onRtl433(raw: string) {
 }
 
 function onEas(line: string) {
+  if (line.trim()) rawTap.add('eas', 'line', line);
   heard('noaa');
   const a = parseSame(line);
   if (!a) return;
@@ -592,6 +611,17 @@ const server = createServer((req, res) => {
     req.on('close', () => clients.delete(res));
     return;
   }
+  if (p === '/api/raw') {
+    // Raw decoder samples for the parsing audit. Local network only: never from the public tunnel.
+    if (isPublic(req)) {
+      res.writeHead(403).end();
+      return;
+    }
+    const source = url.searchParams.get('source');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(source ? rawTap.get(source) : rawTap.summary(), null, 1));
+    return;
+  }
   if (p === '/api/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ ok: true, adsbError: adsb.lastError ?? null, mqtt: Boolean(MQTT_URL), rotating: rotating(), clients: clients.size }));
@@ -650,7 +680,7 @@ async function ingestFiles() {
   }
   mkdirSync(ART_DIR, { recursive: true });
   const radioClips = CLIPS_ROOT ? join(CLIPS_ROOT, 'radio') : undefined;
-  for (const c of await ingestHdRadio(HD_DIR, ART_DIR, radioClips)) {
+  for (const c of await ingestHdRadio(HD_DIR, ART_DIR, radioClips, undefined, (name, text) => rawTap.add('hdradio', name.replace(/_\d{8}.*$/, ''), `${name}\n${text}`))) {
     heard('hdradio', c.ts);
     const key = `${c.freq}_${c.program}`;
     const prev = radio.get(key);

@@ -115,7 +115,8 @@ export function classifyText(title: string | undefined, artist: string | undefin
   return 'song';
 }
 
-export async function ingestHdRadio(dir: string, artDir: string, clipsRadioDir?: string, snipSec = 12): Promise<HdCatch[]> {
+/** `onLog` receives each nrsc5 log's file name and full text before the log is deleted (for the parsing audit). */
+export async function ingestHdRadio(dir: string, artDir: string, clipsRadioDir?: string, snipSec = 12, onLog?: (name: string, text: string) => void): Promise<HdCatch[]> {
   let files: string[];
   try {
     files = (await readdir(dir)).filter((f) => f.endsWith('.log'));
@@ -130,7 +131,9 @@ export async function ingestHdRadio(dir: string, artDir: string, clipsRadioDir?:
       const st = await stat(path);
       if (Date.now() - st.mtimeMs < 30_000) continue; // slot still running
       const m = f.match(/^([\d.]+)_(\d)_/);
-      const log = parseHdLog(await readFile(path, 'utf8'));
+      const text = await readFile(path, 'utf8');
+      onLog?.(f, text);
+      const log = parseHdLog(text);
       const { station, slogan, title, artist, album, lots, artLot } = log;
       const c: HdCatch = { ts: st.mtimeMs, freq: m?.[1] ?? '?', program: Number(m?.[2] ?? 0), station, slogan, title, artist, album };
       if (title) {

@@ -8,6 +8,7 @@ import { readFile, stat } from 'node:fs/promises';
  */
 export class AdsbSource {
   aircraft: Aircraft[] = [];
+  raw: Record<string, unknown>[] = []; // readsb's aircraft objects from the last poll, unmodified
   home?: Home;
   lastHeard?: number;
   lastError?: string;
@@ -45,6 +46,7 @@ export class AdsbSource {
   async poll(): Promise<boolean> {
     try {
       const d = (await this.readJson('aircraft.json')) as { now: number; messages: number; aircraft: Record<string, unknown>[] };
+      this.raw = d.aircraft;
       this.aircraft = d.aircraft
         .filter((a) => typeof a.seen === 'number' && (a.seen as number) < 60)
         .map(toAircraft)
