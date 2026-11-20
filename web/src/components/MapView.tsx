@@ -620,6 +620,45 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
     return () => clearInterval(t);
   }, [ready, tracks, trails]);
 
+  // Weather tab: the broadcast radar drawn on the live map at its own coverage box, with the box outlined.
+  const radar = overlays.radar;
+  const radarKey = radar ? `${radar.url}|${radar.bounds.join(',')}` : '';
+  useEffect(() => {
+    const m = map.current;
+    if (!ready || !m) return;
+    const show = layer === 'weather' && radar !== undefined;
+    const drop = () => {
+      for (const id of ['radar-img', 'radar-box']) if (m.getLayer(id)) m.removeLayer(id);
+      for (const id of ['radar-img', 'radar-box']) if (m.getSource(id)) m.removeSource(id);
+    };
+    drop();
+    if (!show || !radar) return;
+    const [w, s, e, n] = radar.bounds;
+    const before = m.getLayer('trails-line') ? 'trails-line' : undefined;
+    m.addSource('radar-box', { type: 'geojson', data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[w, n], [e, n], [e, s], [w, s], [w, n]] } } });
+    m.addLayer({ id: 'radar-box', type: 'line', source: 'radar-box', paint: { 'line-color': '#f5b547', 'line-opacity': 0.5, 'line-width': 1, 'line-dasharray': [3, 3] } }, before);
+    if (!radar.empty) {
+      m.addSource('radar-img', { type: 'image', url: new URL(radar.url, document.baseURI).href, coordinates: [[w, n], [e, n], [e, s], [w, s]] });
+      m.addLayer({ id: 'radar-img', type: 'raster', source: 'radar-img', paint: { 'raster-opacity': 0.75, 'raster-fade-duration': 0 } }, 'radar-box');
+    }
+    return drop;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, layer, radarKey, radar?.empty]);
+  // Opening the Weather tab zooms out to the radar's coverage; leaving it goes back to the local view.
+  const prevLayer = useRef<Layer>('live');
+  useEffect(() => {
+    const m = map.current;
+    if (!ready || !m) return;
+    if (layer === 'weather' && prevLayer.current !== 'weather' && radar) {
+      const [w, s, e, n] = radar.bounds;
+      m.fitBounds([[w, s], [e, n]], { padding: 24, duration: 600 });
+    } else if (layer !== 'weather' && prevLayer.current === 'weather') {
+      m.easeTo({ center: [-77.03, 38.9], zoom: 8.6, duration: 600 });
+    }
+    prevLayer.current = layer;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, layer]);
+
   const now = snapshot?.now ?? Date.now();
   const adsb = snapshot?.sources.find((s) => s.id === 'adsb');
 
@@ -667,19 +706,26 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
         ) : (
           <div className="layer-panel layer-empty"><b>No traffic map received yet</b><span className="muted">Traffic maps come in over HD Radio during the HD Radio slot and are kept for 90 minutes.</span></div>
         ))}
-      {layer === 'weather' &&
-        (overlays.radar ? (
-          <ImagePanel
-            caption={`Radar from HD Radio · received ${ago(overlays.radar.updatedAt, now)}`}
-            render={(z) => (
-              <div className="layer-img" style={{ width: `${z * 100}%` }}>
-                <img src={overlays.radar!.url} alt="Weather radar image as broadcast" draggable={false} />
-              </div>
+      {layer === 'weather' && (
+        <div className="overlay-b">
+          <div className="tog" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 2, maxWidth: 420 }}>
+            {radar ? (
+              <>
+                <b style={{ fontSize: 12 }}>{radar.empty ? 'No rain or snow on the latest radar' : 'Weather radar'}</b>
+                <span className="muted" style={{ fontSize: 11 }}>
+                  From HD Radio · received {ago(radar.updatedAt, now)}
+                  {radar.empty ? ' · the dashed box is the area it covers' : ''}
+                </span>
+              </>
+            ) : (
+              <>
+                <b style={{ fontSize: 12 }}>No radar image in the last 45 minutes</b>
+                <span className="muted" style={{ fontSize: 11 }}>Radar comes in over HD Radio during the deep HD Radio pass, about every half hour.</span>
+              </>
             )}
-          />
-        ) : (
-          <div className="layer-panel layer-empty"><b>No radar image received yet</b><span className="muted">Radar comes in over HD Radio with the traffic maps. It will show here as broadcast.</span></div>
-        ))}
+          </div>
+        </div>
+      )}
     </section>
   );
 });

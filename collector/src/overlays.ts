@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Overlays } from '../../shared/types.ts';
+import { pngHasVisiblePixels } from './png.ts';
 
 const TRAFFIC_MAX_AGE_MS = 90 * 60_000;
 const RADAR_MAX_AGE_MS = 45 * 60_000;
@@ -102,7 +103,23 @@ function readRadar(dir: string, files: string[], now: number): Overlays['radar']
   }
   const bounds: Bounds = [west, south, east, north];
   if (!best || !bounds.every(Number.isFinite)) return undefined;
-  return { url: url(best.file), updatedAt: best.ts, bounds };
+  return { url: url(best.file), updatedAt: best.ts, bounds, empty: radarEmpty(dir, best.file) };
+}
+
+// Whether a radar image shows any precipitation, remembered per file (they never change once written).
+const emptyCache = new Map<string, boolean | undefined>();
+function radarEmpty(dir: string, file: string): boolean | undefined {
+  if (!emptyCache.has(file)) {
+    let visible: boolean | undefined;
+    try {
+      visible = pngHasVisiblePixels(readFileSync(join(dir, file)));
+    } catch {
+      visible = undefined;
+    }
+    if (emptyCache.size > 200) emptyCache.clear();
+    emptyCache.set(file, visible === undefined ? undefined : !visible);
+  }
+  return emptyCache.get(file);
 }
 
 /** Reads the HD Radio traffic tiles and weather radar the collector has stored in `mapsDir`. */

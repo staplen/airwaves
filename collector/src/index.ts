@@ -1,7 +1,7 @@
 import { createServer, type ServerResponse } from 'node:http';
 import { createSocket } from 'node:dgram';
 import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs';
-import { copyFile, mkdir } from 'node:fs/promises';
+import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname, extname, join, normalize } from 'node:path';
 import { connect as mqttConnect } from 'mqtt';
 import type { Aircraft, AisFixed, Balloon, FeedItem, Overlays, Pin, PinMetric, RadioStation, SchedulerState, SensorInfo, SlotStat, Snapshot, SourceStatus, SpectrumHeat, Tracks, Vessel } from '../../shared/types.ts';
@@ -11,8 +11,9 @@ import { ClipWatcher, type Clip } from './clips.ts';
 import { parseSame } from './eas.ts';
 import { ingestSpectrum, purgeOldFiles, SPECTRUM_BINS } from './housekeeping.ts';
 import { ingestHdRadio } from './hdradio.ts';
-import { ingestTrains, loggedBursts, type TrainBurst } from './trains.ts';
-import { clipPeaks } from './peaks.ts';
+import { ingestTrains, loggedBursts, SAMPLE_RATE as TRAIN_RATE, type TrainBurst } from './trains.ts';
+import { decodeEot, describeEot } from './eot.ts';
+import { clipPeaks, wavSamples } from './peaks.ts';
 import { loadGroundStations } from './groundstations.ts';
 import { approxHome, randomOffset, type Offset } from './privacy.ts';
 import { readOverlays } from './overlays.ts';
@@ -201,7 +202,7 @@ function slotFailure(id: string, now: number): string | undefined {
 
 
 // ---- header tiles: one headline number + one interesting line per slot ---------------------
-let trainsToday = { day: '', bursts: 0 };
+let trainsToday: { day: string; bursts: number; units?: number[] } = { day: '', bursts: 0, units: [] };
 let statsCache: { at: number; value: Record<string, SlotStat> } | undefined;
 const fmtAltFt = (ft: number) => (ft >= 18000 ? `FL${Math.round(ft / 100)}` : `${ft.toLocaleString('en-US')} ft`);
 const top = (xs: string[]) => {
@@ -239,7 +240,14 @@ function slotStats(now: number, aircraft: Aircraft[]): Record<string, SlotStat> 
         temp !== undefined
           ? { value: `${Math.round(temp)}°F`, label: pinnedTemp!.label, short: 'outside', brief: plural(cars, 'car'), detail: plural(cars, 'car') + ' passed today' }
           : { value: String(cars), label: 'cars passed', short: 'cars', brief: sensors.size ? plural(sensors.size, 'sensor') : undefined, detail: sensors.size ? `${plural(sensors.size, 'sensor')} heard` : undefined },
-      trains: { value: String(trainsToday.day === day ? trainsToday.bursts : 0), label: 'train bursts', short: 'bursts', brief: 'probe', detail: 'probe on 457.94 MHz' },
+      trains: (() => {
+        const t = trainsToday.day === day ? trainsToday : { bursts: 0, units: [] as number[] };
+        const units = t.units?.length ?? 0;
+        // Decoded end-of-train devices count as trains; bursts too noisy to decode are listed beside them.
+        return units
+          ? { value: String(units), label: units === 1 ? 'train' : 'trains', short: 'trains', brief: `${t.bursts} bursts`, detail: `${t.bursts} bursts on 457.94 MHz` }
+          : { value: String(t.bursts), label: 'train bursts', short: 'bursts', brief: 'probe', detail: 'probe on 457.94 MHz' };
+      })(),
       noaa: { value: String(wxClips), label: 'weather radio clips', short: 'clips', brief: alerts ? plural(alerts, 'alert') : 'no alerts', detail: alerts ? plural(alerts, 'alert') + ' today' : tests.length ? `weekly test at ${new Date(tests[0].ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: env.TIMEZONE ?? 'America/New_York' })}` : 'no alerts today' },
       sonde: { value: String(balloons.length), label: balloons.length === 1 ? 'balloon' : 'balloons', short: 'balloons', brief: balloons[0]?.id, detail: balloons[0] ? `${balloons[0].id} at ${(balloons[0].altM / 1000).toFixed(1)} km` : 'launches ~7 AM & 7 PM' },
       hdradio: { value: String(songs.length), label: 'songs today', short: 'songs', brief: lastSong?.title.replace(/ HD\d$/, ''), detail: lastSong ? `${lastSong.body} · ${lastSong.title.replace(/ HD\d$/, '')}` : undefined },
@@ -260,6 +268,11 @@ let publicOffset: Offset | undefined; // set in loadState
 const DISTANCE_TEXT = /,?\s*(?:at\s+)?[\d.]+\s*nm\b/g;
 function publicSnapshot(s: Snapshot): Snapshot {
   return { ...s, sensors: undefined, pinned: s.pinned?.map((p) => ({ ...p, key: '' })), home: s.home && publicOffset ? approxHome(s.home, publicOffset) : undefined, };
+}
+// Older aircraft summaries said how far planes were from the receiver; strip that from the stored feed too.
+{
+  const n = store.rewriteBodies('Aircraft', (b) => b.replace(DISTANCE_TEXT, '').replace(/\.\s*Farthest [^.]*\.?/, '.').trim());
+  if (n) console.log(`privacy: removed distances from ${n} older aircraft summaries`);
 }
 function publicItem(f: FeedItem): FeedItem {
   return f.kind === 'Aircraft' ? { ...f, body: f.body.replace(DISTANCE_TEXT, '') } : f;
@@ -798,9 +811,13 @@ async function ingestFiles() {
   const bursts = await ingestTrains(TRAINS_DIR);
   if (bursts.length) {
     const d = localDay(now);
-    trainsToday = { day: d, bursts: (trainsToday.day === d ? trainsToday.bursts : 0) + bursts.length };
+    if (trainsToday.day !== d) trainsToday = { day: d, bursts: 0, units: [] };
+    trainsToday.bursts += bursts.length;
+    for (const b of bursts) {
+      const unit = await postTrain(b);
+      if (unit !== undefined && !trainsToday.units?.includes(unit)) (trainsToday.units ??= []).push(unit);
+    }
     store.setState('trainsToday', trainsToday);
-    for (const b of bursts) await postTrain(b);
   }
   mkdirSync(ART_DIR, { recursive: true });
   const radioClips = CLIPS_ROOT ? join(CLIPS_ROOT, 'radio') : undefined;
@@ -845,7 +862,22 @@ function radioTag(c: { title?: string; textKind?: string; textSynced?: boolean; 
 setInterval(() => void ingestFiles(), 60_000);
 
 // ---- trains: end-of-train device bursts on 457.9375 MHz -------------------------------------
-async function postTrain(b: TrainBurst) {
+/** Decodes a burst clip: the card's title and text, and the device's unit number when the checksum passed. */
+async function readTrain(file: string, ms?: number): Promise<{ title: string; body: string; unit?: number }> {
+  let packets: ReturnType<typeof decodeEot> = [];
+  try {
+    const s = wavSamples(await readFile(join(TRAINS_DIR, 'review', file)));
+    if (s) packets = decodeEot(s, TRAIN_RATE);
+  } catch {
+    /* clip gone: fall through */
+  }
+  const p = packets[0];
+  if (p) return { title: `Train passing · EOT ${p.unit}`, body: describeEot(p), unit: p.unit };
+  return { title: 'Train passing', body: `A ${ms ? `${ms} ms ` : ''}data burst from a train's end-of-train device (the box on the last car that reports brake pressure), too noisy to decode.` };
+}
+
+/** Posts a burst to the feed; returns the end-of-train unit when it decoded. */
+async function postTrain(b: TrainBurst): Promise<number | undefined> {
   let clip: string | undefined;
   if (CLIPS_ROOT) {
     try {
@@ -856,7 +888,26 @@ async function postTrain(b: TrainBurst) {
       /* no clip: the card still shows */
     }
   }
-  publishFeed({ ts: b.at, family: 'rail', kind: 'Train', title: 'Train passing', meta: '457.938', body: `A ${b.ms} ms data burst from a train's end-of-train device (the box on the last car that reports brake pressure). Not decoded yet.`, clip, peaks: await peaksOf(clip) });
+  const t = await readTrain(b.file, b.ms);
+  publishFeed({ ts: b.at, family: 'rail', kind: 'Train', title: t.title, meta: '457.938', body: t.body, clip, peaks: await peaksOf(clip) });
+  return t.unit;
+}
+// Cards posted before decoding existed: decode their clips once (the review folder keeps a week of them).
+if (!store.getState('trainsDecoded')) {
+  store.setState('trainsDecoded', true);
+  void (async () => {
+    let n = 0;
+    for (const r of store.feedOfKind('Train')) {
+      const file = r.clip ? decodeURIComponent(r.clip.split('/').pop() ?? '') : '';
+      if (!file) continue;
+      const t = await readTrain(file);
+      if (!t.unit) continue;
+      store.setTitleBody(r.id, t.title, t.body);
+      n++;
+      if (localDay(r.ts) === localDay(Date.now()) && trainsToday.day === localDay(r.ts) && !trainsToday.units?.includes(t.unit)) (trainsToday.units ??= []).push(t.unit);
+    }
+    if (n) console.log(`trains: decoded ${n} earlier burst(s)`);
+  })();
 }
 // Bursts caught before trains reached the feed: post them once.
 if (!store.getState('trainsBackfilled')) {

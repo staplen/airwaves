@@ -74,6 +74,27 @@ export class Store {
     return this.db.prepare('SELECT id, clip FROM feed WHERE ts >= ? AND clip IS NOT NULL AND peaks IS NULL ORDER BY ts DESC').all(sinceTs) as { id: number; clip: string }[];
   }
 
+  /** Rewrites feed bodies of one kind in place (one-off clean-ups); returns how many changed. */
+  rewriteBodies(kind: string, fn: (body: string) => string): number {
+    let n = 0;
+    for (const r of this.db.prepare('SELECT id, body FROM feed WHERE kind = ?').all(kind) as { id: number; body: string }[]) {
+      const next = fn(r.body);
+      if (next === r.body) continue;
+      this.db.prepare('UPDATE feed SET body = ? WHERE id = ?').run(next, r.id);
+      n++;
+    }
+    return n;
+  }
+
+  /** Feed items of one kind, newest first (for one-off re-processing). */
+  feedOfKind(kind: string): { id: number; ts: number; title: string; body: string; clip?: string }[] {
+    return this.db.prepare('SELECT id, ts, title, body, clip FROM feed WHERE kind = ? ORDER BY ts DESC').all(kind) as { id: number; ts: number; title: string; body: string; clip?: string }[];
+  }
+
+  setTitleBody(id: number, title: string, body: string) {
+    this.db.prepare('UPDATE feed SET title = ?, body = ? WHERE id = ?').run(title, body, id);
+  }
+
   setPeaks(id: number, peaks: string) {
     this.db.prepare('UPDATE feed SET peaks = ? WHERE id = ?').run(peaks, id);
   }

@@ -219,5 +219,5 @@ export interface SpectrumHeat {
 /** Traffic tiles and weather radar decoded off HD Radio data services. bounds = [west, south, east, north]. */
 export interface Overlays {
   traffic?: { mapId: string; updatedAt: number; rows?: number; cols?: number; tiles: { url: string; bounds: [number, number, number, number]; row?: number; col?: number }[]; background?: [number, number, number] };
-  radar?: { url: string; updatedAt: number; bounds: [number, number, number, number] };
+  radar?: { url: string; updatedAt: number; bounds: [number, number, number, number]; empty?: boolean }; // empty: no rain or snow in the image
 }
