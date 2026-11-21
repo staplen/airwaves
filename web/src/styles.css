@@ -288,3 +288,8 @@ button.slot:hover { border-color: var(--line-strong); }
   .onair-prog { transition: none; }
   .onair.switching-out::after { animation: none; }
 }
+/* Feed card button that flies the map to where the catch happened */
+.locate { flex: none; width: 26px; height: 26px; margin: -4px -6px -4px 0; border-radius: 7px; border: 1px solid transparent; background: none; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.locate:hover { color: var(--text); border-color: var(--line-strong); background: var(--raised); }
+.locate:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+

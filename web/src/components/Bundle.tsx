@@ -12,6 +12,7 @@ const PER_LOOP = { gap: 3 * MIN, span: 15 * MIN };
 const PER_HOUR = { gap: 30 * MIN, span: 60 * MIN };
 const RULES: Record<string, Rule> = {
   ATC: { ...PER_LOOP, noun: ['transmission', 'transmissions'] },
+  'Rail radio': { ...PER_LOOP, noun: ['transmission', 'transmissions'] },
   Datalink: { ...PER_LOOP, noun: ['message', 'messages'] },
   Radio: { ...PER_LOOP, noun: ['station', 'stations'] },
   Train: { ...PER_LOOP, noun: ['burst', 'bursts'] },
@@ -100,7 +101,7 @@ export function BundleCard({ items, renderItem }: { items: FeedItem[]; renderIte
   const newest = items[0].ts;
   const oldest = items[items.length - 1].ts;
   const cur = playable[Math.min(idx, playable.length - 1)];
-  const sec = first.kind === 'ATC';
+  const sec = first.kind === 'ATC' || first.kind === 'Rail radio';
 
   return (
     <article className="card catch">
@@ -116,7 +117,7 @@ export function BundleCard({ items, renderItem }: { items: FeedItem[]; renderIte
             {timeRange(oldest, newest, sec)}
           </span>
         </div>
-        {titles.size > 1 || first.kind === 'ATC' ? (
+        {titles.size > 1 || first.kind === 'ATC' || first.kind === 'Rail radio' ? (
           <div className="catch-body">{whoLine(items)}</div>
         ) : first.body ? (
           <div className="catch-body">

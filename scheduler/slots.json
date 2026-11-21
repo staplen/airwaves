@@ -128,8 +128,8 @@
       "cmd": ["--output", "json:udp:host=127.0.0.1,port=5551", "-g", "49.6", "--rtlsdr", "0", "130.025", "130.450", "131.125", "131.550"]
     },
     {
-      "id": "rail", "name": "Rail radio (beta)", "freqMhz": 160.6875, "minutes": 1, "beta": true,
-      "comment": "BETA: every channel of the railroad voice band recorded to /media/airwaves/rail (24 h), counted but not posted, until we know what's used here.",
+      "id": "rail", "name": "Rail radio", "freqMhz": 160.6875, "minutes": 1,
+      "comment": "Every channel of the railroad voice band (dispatchers, crews, trackside defect detectors); clips go to the feed like ATC and are kept 24 h.",
       "image": "ghcr.io/rtl-airband/rtlsdr-airband:v7.0.1",
       "binds": [
         "/mnt/data/supervisor/share/airwaves/app/deploy/rail/rtl_airband.conf:/app/rtl_airband.conf:ro",

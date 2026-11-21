@@ -4,6 +4,7 @@ import { FAMILY_COLOR, FAMILY_LABEL } from '../bands.ts';
 import { BundleCard, bundleRows, kindLabel } from './Bundle.tsx';
 import { ClipPlayer } from './ClipPlayer.tsx';
 import { onShowOnly } from '../feedFilter.ts';
+import { focusOnMap, setMapFilter } from '../mapEvents.ts';
 
 const PLACEHOLDER = /^(Transcript coming soon|Latest 60-second clip)/;
 const CLIP_RETENTION_MS = 24 * 3600_000; // matches the collector's audio purge
@@ -15,7 +16,7 @@ const CATEGORIES: { family: Family; subs: { id: string; label: string; kinds: st
   { family: 'sea', subs: [{ id: 'ships', label: 'Ships', kinds: ['Ship'] }] },
   { family: 'wx', subs: [{ id: 'radio', label: 'Weather radio', kinds: ['Weather'] }, { id: 'alerts', label: 'Weather alerts', kinds: ['Weather alert', 'Weather test'] }, { id: 'balloons', label: 'Balloons', kinds: ['Balloon'] }] },
   { family: 'bcast', subs: [{ id: 'radio-hd', label: 'HD Radio', kinds: ['Radio'] }] },
-  { family: 'rail', subs: [{ id: 'trains', label: 'Trains', kinds: ['Train'] }] },
+  { family: 'rail', subs: [{ id: 'trains', label: 'Trains', kinds: ['Train'] }, { id: 'rail-radio', label: 'Rail radio', kinds: ['Rail radio'] }] },
   { family: 'ham', subs: [{ id: 'aprs', label: 'Ham radio stations', kinds: ['APRS'] }, { id: 'aprs-wx', label: 'Ham weather stations', kinds: ['APRS weather'] }] },
   { family: 'home', subs: [{ id: 'street', label: 'Tire sensors', kinds: ['Street'] }, { id: 'sensors', label: 'Sensors', kinds: ['Sensor'] }, { id: 'meter', label: 'Gas meter', kinds: ['Home'] }] },
 ];
@@ -54,7 +55,7 @@ const LEGACY_TIME = /\s·\s\d{1,2}:\d{2}(:\d{2})?$/;
 
 /** Frequency or source, then the time in the viewer's own time zone. */
 function metaLine(item: FeedItem): string {
-  const time = new Date(item.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: item.kind.startsWith('ATC') ? '2-digit' : undefined });
+  const time = new Date(item.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: item.kind.startsWith('ATC') || item.kind === 'Rail radio' ? '2-digit' : undefined });
   return `${item.meta.replace(LEGACY_TIME, '')} · ${time}`;
 }
 
@@ -143,6 +144,11 @@ export const Feed = memo(function Feed({ items }: { items: FeedItem[] }) {
   }, [words, hidden, items]);
 
   useEffect(() => setActive(-1), [query]);
+  // Tell the map which families are filtered in, so it can dim everything else (all shown: no dimming).
+  useEffect(() => {
+    const off = TYPES.filter((t) => hidden.includes(t.id));
+    setMapFilter(off.length ? [...new Set(TYPES.filter((t) => !hidden.includes(t.id)).map((t) => t.family))] : null);
+  }, [hidden]);
   // The header loop strip can ask for "only these types" (e.g. clicking the ATC segment).
   useEffect(
     () =>
@@ -210,6 +216,11 @@ export const Feed = memo(function Feed({ items }: { items: FeedItem[] }) {
             <span className="catch-kind" style={{ color: FAMILY_COLOR[i.family] }}>{highlight(kindLabel(i.kind), words)}</span>
             <b style={{ fontSize: 13 }}>{highlight(i.title, words)}</b>
             <span className="mono muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{highlight(metaLine(i), words)}</span>
+            {(i.ref || (i.lat !== undefined && i.lon !== undefined)) && (
+              <button type="button" className="locate" aria-label={`Show ${i.title} on the map`} title="Show on the map" onClick={() => focusOnMap({ ref: i.ref, lat: i.lat, lon: i.lon, label: i.title })}>
+                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M7 1.5a4 4 0 0 0-4 4c0 3 4 7 4 7s4-4 4-7a4 4 0 0 0-4-4Z" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><circle cx="7" cy="5.5" r="1.4" fill="currentColor" /></svg>
+              </button>
+            )}
           </div>
           {i.body && !PLACEHOLDER.test(i.body) && (
             <div className={i.mono ? 'catch-body mono' : 'catch-body'} style={i.tag === 'Station message' ? { color: 'var(--muted)' } : undefined}>

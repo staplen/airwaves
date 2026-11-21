@@ -111,6 +111,19 @@ export interface Balloon {
   firstSeen: number;
   lastSeen: number;
   track: [number, number][]; // [lon, lat], oldest first
+  // Readings from the sonde itself (radiosonde_auto_rx payload summary):
+  tempC?: number; // air temperature
+  minTempC?: number; // coldest so far
+  humidity?: number; // relative humidity %, when the sensor reports it
+  speedKmh?: number; // horizontal (wind-driven) speed
+  heading?: number; // direction it's drifting toward, degrees
+  sats?: number; // GPS satellites in use
+  battV?: number;
+  snrDb?: number;
+  frames?: number; // packets heard
+  poweredOnAt?: number; // estimated from the frame counter (one frame per second since power-on)
+  maxAltAt?: number; // when the peak was reached
+  lastHeardPosted?: boolean;
 }
 
 /** A signal source (decoder slot) and how fresh its data is. */
@@ -178,6 +191,9 @@ export interface FeedItem {
   image?: string; // e.g. HD Radio album art URL
   tag?: string; // short caveat shown before the body, e.g. "Station message"
   peaks?: string; // clip waveform: one character per bar, 0–63 (see collector/src/peaks.ts)
+  lat?: number; // where it happened, when known (shown on the map when the card is clicked)
+  lon?: number;
+  ref?: string; // the map object it's about: "air:<hex>", "sea:<mmsi>", "aprs:<call>", "balloon:<id>", "site:<id>"
 }
 
 /** An HD Radio station seen by the sweep, with what it was last playing. */

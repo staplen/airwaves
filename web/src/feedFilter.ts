@@ -11,6 +11,7 @@ export const SOURCE_TYPES: Record<string, string[]> = {
   sonde: ['balloons'],
   hdradio: ['radio-hd', 'family:bcast'],
   trains: ['trains', 'family:rail'],
+  rail: ['rail-radio'],
   uat: ['aircraft'],
   acars: ['datalink'],
   aprs: ['aprs', 'aprs-wx', 'family:ham'],

@@ -60,12 +60,15 @@ export class Store {
     if (!cols.includes('image')) this.db.exec('ALTER TABLE feed ADD COLUMN image TEXT');
     if (!cols.includes('tag')) this.db.exec('ALTER TABLE feed ADD COLUMN tag TEXT');
     if (!cols.includes('peaks')) this.db.exec('ALTER TABLE feed ADD COLUMN peaks TEXT');
+    if (!cols.includes('lat')) this.db.exec('ALTER TABLE feed ADD COLUMN lat REAL');
+    if (!cols.includes('lon')) this.db.exec('ALTER TABLE feed ADD COLUMN lon REAL');
+    if (!cols.includes('ref')) this.db.exec('ALTER TABLE feed ADD COLUMN ref TEXT');
   }
 
   addFeed(item: Omit<FeedItem, 'id'>): FeedItem {
     const r = this.db
-      .prepare('INSERT INTO feed (ts, family, kind, title, meta, body, mono, clip, raw, image, tag, peaks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(item.ts, item.family, item.kind, item.title, item.meta, item.body, item.mono ? 1 : 0, item.clip ?? null, item.raw ?? null, item.image ?? null, item.tag ?? null, item.peaks ?? null);
+      .prepare('INSERT INTO feed (ts, family, kind, title, meta, body, mono, clip, raw, image, tag, peaks, lat, lon, ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(item.ts, item.family, item.kind, item.title, item.meta, item.body, item.mono ? 1 : 0, item.clip ?? null, item.raw ?? null, item.image ?? null, item.tag ?? null, item.peaks ?? null, item.lat ?? null, item.lon ?? null, item.ref ?? null);
     return { ...item, id: Number(r.lastInsertRowid) };
   }
 
@@ -260,5 +263,8 @@ function toItem(r: Record<string, unknown>): FeedItem {
     raw: typeof r.raw === 'string' ? r.raw : undefined,
     tag: typeof r.tag === 'string' ? r.tag : undefined,
     peaks: typeof r.peaks === 'string' ? r.peaks : undefined,
+    lat: typeof r.lat === 'number' ? r.lat : undefined,
+    lon: typeof r.lon === 'number' ? r.lon : undefined,
+    ref: typeof r.ref === 'string' ? r.ref : undefined,
   };
 }

@@ -24,7 +24,8 @@ import { describeAprs, weatherLine } from './aprstext.ts';
 import { approxHome, randomOffset, type Offset } from './privacy.ts';
 import { readOverlays } from './overlays.ts';
 import { Publisher } from './publisher.ts';
-import { SondeTracker } from './sonde.ts';
+import { describeBalloon, SondeTracker } from './sonde.ts';
+import { SITES } from '../../shared/sites.ts';
 import { TrackStore } from './tracks.ts';
 import { RawTap, tryJson, vdl2Kind } from './rawtap.ts';
 import { RawLog } from './rawlog.ts';
@@ -401,6 +402,9 @@ function checkEmergencies(now: number) {
       title: `${name} · ${a.squawk && EMERGENCY_SQUAWK[a.squawk] ? `squawking ${a.squawk}` : 'emergency'}`,
       meta: '1090',
       body: `${what.charAt(0).toUpperCase()}${what.slice(1)}. ${[a.typeDesc, `at ${fmtAlt(a)}${climb}`].filter(Boolean).join(' ')}.`,
+      lat: a.lat,
+      lon: a.lon,
+      ref: `air:${a.hex}`,
     });
   }
   for (const [hex, e] of emergencySeen) if (now - (e.announced ?? e.first) > 3 * 3600_000) emergencySeen.delete(hex);
@@ -500,7 +504,7 @@ const shipsToAnnounce = new Map<number, number>();
 function announceShip(v: Vessel) {
   shipsToAnnounce.delete(v.mmsi);
   const motion = v.sog !== undefined ? (v.sog < 0.5 ? 'stopped' : `${v.sog.toFixed(1)} kn`) : 'no speed yet';
-  publishFeed({ ts: Date.now(), family: 'sea', kind: 'Ship', title: v.name ?? `MMSI ${v.mmsi}`, meta: 'AIS', body: `${v.shipType ?? 'Vessel'} · ${motion} · first seen today` });
+  publishFeed({ ts: Date.now(), family: 'sea', kind: 'Ship', title: v.name ?? `MMSI ${v.mmsi}`, meta: 'AIS', body: `${v.shipType ?? 'Vessel'} · ${motion} · first seen today${v.lat === undefined ? ' · no position heard yet' : ''}`, lat: v.lat, lon: v.lon, ref: `sea:${v.mmsi}` });
 }
 
 // ---- VDL2 (dumpvdl2 sends JSON over UDP) -------------------------------------------------
@@ -527,7 +531,7 @@ function onDatalink(c: NonNullable<ReturnType<typeof parseVdl2>>) {
   const last = lastVdl2PerFlight.get(key) ?? 0;
   if (!c.title.includes('controller') && c.ts - last < 5 * 60_000) return;
   lastVdl2PerFlight.set(key, c.ts);
-  publishFeed({ ts: c.ts, family: 'air', kind: 'Datalink', title: c.title, meta: `${c.freqMhz.toFixed(3)}`, body: c.body, raw: c.raw });
+  publishFeed({ ts: c.ts, family: 'air', kind: 'Datalink', title: c.title, meta: `${c.freqMhz.toFixed(3)}`, body: c.body, raw: c.raw, lat: c.lat, lon: c.lon, ref: c.hex ? `air:${c.hex}` : undefined });
 }
 
 // ---- weather balloons (radiosonde_auto_rx payload summaries over UDP) -----------------------
@@ -540,12 +544,18 @@ function onSonde(raw: string) {
   heard('sonde');
   const b = e.balloon;
   const freq = b.freqMhz ? b.freqMhz.toFixed(3) : '400–406';
-  if (e.kind === 'detected') {
-    publishFeed({ ts: Date.now(), family: 'wx', kind: 'Balloon', title: `Weather balloon ${b.id}`, meta: freq, body: `${b.model ?? 'Radiosonde'} picked up at ${km(b.altM)}${b.vertMps !== undefined ? `, ${b.vertMps > 0 ? 'climbing' : 'descending'} ${Math.abs(b.vertMps).toFixed(1)} m/s` : ''}.` });
-  } else if (e.kind === 'burst') {
-    publishFeed({ ts: Date.now(), family: 'wx', kind: 'Balloon', title: `Balloon ${b.id} burst`, meta: freq, body: `Reached ${km(b.maxAltM)} before bursting; now falling by parachute.` });
+  if (e.kind === 'detected' || e.kind === 'burst' || e.kind === 'progress') {
+    const d = describeBalloon(e.kind, b);
+    publishFeed({ ts: Date.now(), family: 'wx', kind: 'Balloon', title: d.title, meta: freq, body: d.body, lat: b.lat, lon: b.lon, ref: `balloon:${b.id}` });
   }
 }
+// A flight that went quiet on the way down gets a closing card with where it was last heard.
+setInterval(() => {
+  for (const b of sondes.lastHeard()) {
+    const d = describeBalloon('last', b);
+    publishFeed({ ts: b.lastSeen, family: 'wx', kind: 'Balloon', title: d.title, meta: b.freqMhz ? b.freqMhz.toFixed(3) : '400–406', body: d.body, lat: b.lat, lon: b.lon, ref: `balloon:${b.id}` });
+  }
+}, 60_000).unref();
 
 // ---- tire sensors: one feed card per passing car ------------------------------------------
 const tires = new TireGrouper();
@@ -699,13 +709,22 @@ async function onClip(c: Clip) {
     store.sight(localDay(c.ts), 'atc', c.file, c.ts);
     atcHeard.set(c.template, Math.max(atcHeard.get(c.template) ?? 0, c.ts));
     const ch = ATC_NAMES[c.template] ?? { name: c.template.replace(/_/g, ' '), freq: '' };
-    publishFeed({ ts: c.ts, family: 'air', kind: 'ATC', title: ch.name, meta: `${ch.freq}`, body: '', clip: url, peaks });
+    const site = SITES.find((st) => st.channels.some((x) => x.atc === c.template));
+    publishFeed({ ts: c.ts, family: 'air', kind: 'ATC', title: ch.name, meta: `${ch.freq}`, body: '', clip: url, peaks, lat: site?.lat, lon: site?.lon, ref: site ? `site:${site.id}` : undefined });
   } else if (c.dir === 'noaa') {
     heard('noaa', c.ts);
-    publishFeed({ ts: c.ts, family: 'wx', kind: 'Weather', title: 'NOAA Weather Radio', meta: `162.450`, body: '', clip: url, peaks });
+    const noaaSite = SITES.find((st) => st.id === 'noaa-wx');
+    publishFeed({ ts: c.ts, family: 'wx', kind: 'Weather', title: 'NOAA Weather Radio', meta: `162.450`, body: '', clip: url, peaks, lat: noaaSite?.lat, lon: noaaSite?.lon, ref: noaaSite ? 'site:noaa-wx' : undefined });
+  } else if (c.dir === 'rail') {
+    // rtl_airband names each channel RAIL_<kHz>; AAR channel numbers run 07 (159.810) upward in 15 kHz steps.
+    const mhz = Number(c.template.replace(/^RAIL_/, '')) / 1000;
+    if (!Number.isFinite(mhz)) return;
+    heard('rail', c.ts);
+    const aar = Math.round((mhz - 159.81) / 0.015) + 7;
+    publishFeed({ ts: c.ts, family: 'rail', kind: 'Rail radio', title: `Railroad channel ${String(aar).padStart(2, '0')}`, meta: mhz.toFixed(3), body: '', clip: url, peaks });
   }
 }
-if (CLIPS_ROOT) new ClipWatcher({ atc: join(CLIPS_ROOT, 'atc'), noaa: join(CLIPS_ROOT, 'noaa') }, (c) => void onClip(c)).start();
+if (CLIPS_ROOT) new ClipWatcher({ atc: join(CLIPS_ROOT, 'atc'), noaa: join(CLIPS_ROOT, 'noaa'), rail: join(CLIPS_ROOT, 'rail') }, (c) => void onClip(c)).start();
 // Clips filed before waveforms existed (or while ffmpeg was missing): fill them in once, in the background.
 void (async () => {
   let n = 0;
@@ -954,7 +973,7 @@ function radioTag(c: { title?: string; textKind?: string; textSynced?: boolean; 
 }
 setInterval(() => void ingestFiles(), 60_000);
 
-// ---- beta: railroad voice recordings (counted, not posted) ------------------------------------
+// ---- railroad voice: transmission counts for the header tile (clips go to the feed via onClip) ----
 let railCache: { at: number; stat: SlotStat } | undefined;
 function railStat(): SlotStat {
   const now = Date.now();
@@ -972,7 +991,7 @@ function railStat(): SlotStat {
     /* no recordings yet */
   }
   const top = [...byFreq].sort((a, b) => b[1] - a[1])[0];
-  const stat: SlotStat = { value: String(n), label: 'transmissions (24 h)', short: 'transmissions', brief: top ? `busiest ${(Number(top[0]) / 1000).toFixed(3)}` : 'listening', detail: top ? `busiest channel ${(Number(top[0]) / 1000).toFixed(3)} MHz · recordings not posted yet` : 'recording all railroad channels; not posted yet' };
+  const stat: SlotStat = { value: String(n), label: 'transmissions (24 h)', short: 'transmissions', brief: top ? `busiest ${(Number(top[0]) / 1000).toFixed(3)}` : 'listening', detail: top ? `busiest channel ${(Number(top[0]) / 1000).toFixed(3)} MHz` : 'listening to every railroad channel' };
   railCache = { at: now, stat };
   return stat;
 }
@@ -989,11 +1008,11 @@ function onAprs(p: AprsPacket, ts: number, line: string) {
   const wx = st.weather;
   if (r.isNew) {
     const d = describeAprs(st);
-    publishFeed({ ts, family: 'ham', kind: 'APRS', title: d.title, meta: '144.390', body: d.body });
+    publishFeed({ ts, family: 'ham', kind: 'APRS', title: d.title, meta: '144.390', body: d.body, lat: st.lat, lon: st.lon, ref: `aprs:${st.call}` });
     if (wx) aprsWeatherPosted.set(st.call, ts);
   } else if (wx && ts - (aprsWeatherPosted.get(st.call) ?? 0) > 3 * 3600_000) {
     aprsWeatherPosted.set(st.call, ts);
-    publishFeed({ ts, family: 'ham', kind: 'APRS weather', title: `${st.call} weather`, meta: '144.390', body: `${weatherLine(wx)}.` });
+    publishFeed({ ts, family: 'ham', kind: 'APRS weather', title: `${st.call} weather`, meta: '144.390', body: `${weatherLine(wx)}.`, lat: st.lat, lon: st.lon, ref: `aprs:${st.call}` });
   }
 }
 

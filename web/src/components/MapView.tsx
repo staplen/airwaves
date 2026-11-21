@@ -9,6 +9,8 @@ import { apiUrl, isStatic } from '../api.ts';
 import { ago } from '../live.ts';
 import { sitesFC } from '../sites.ts';
 import { timeRange } from './Bundle.tsx';
+import { onMapFilter, onMapFocus } from '../mapEvents.ts';
+import { SITES } from '../../../shared/sites.ts';
 import { AGE_OPACITY, TRAIL_COLOR, tracksFC } from '../trails.ts';
 
 const STYLE = 'https://tiles.openfreemap.org/styles/dark';
@@ -173,7 +175,7 @@ function balloonsFC(list: Balloon[]): FC {
     features.push({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [b.lon, b.lat] },
-      properties: { op, label: `${b.id} · ${(b.altM / 1000).toFixed(1)} km ${arrow}${b.burst ? ' · burst' : ''}${ageH >= 1 ? ` · ${Math.round(ageH)} h ago` : ''}` },
+      properties: { id: `balloon:${b.id}`, op, label: `${b.id} · ${(b.altM / 1000).toFixed(1)} km ${arrow}${b.burst ? ' · burst' : ''}${ageH >= 1 ? ` · ${Math.round(ageH)} h ago` : ''}`, info: JSON.stringify({ ...b, track: undefined }) },
     });
   }
   return { type: 'FeatureCollection', features };
@@ -378,6 +380,9 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
   const [trails, setTrails] = useState(true);
   const approx = useRef(false);
   const onScreen = useRef(true);
+  const snapRef = useRef<Snapshot | undefined>(snapshot);
+  snapRef.current = snapshot;
+  const focusUntil = useRef(0); // the highlight ring around a catch shown from the feed
 
   useEffect(() => {
     const node = el.current;
@@ -432,7 +437,7 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
     };
     // Touch screens never send mouseleave: a tap on empty map closes the card.
     m.on('click', (e) => {
-      const layers = ['aids', 'sites', 'aircraft', 'aprs', 'uat-gs', 'trails-hit'].filter((l) => m.getLayer(l));
+      const layers = ['aids', 'sites', 'aircraft', 'aprs', 'uat-gs', 'balloons', 'trails-hit'].filter((l) => m.getLayer(l));
       if (!m.queryRenderedFeatures(e.point, { layers }).length) {
         hover.remove();
         shown = undefined;
@@ -477,6 +482,18 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
         const f = e.features?.[0];
         if (!f || f.geometry.type !== 'Point') return undefined;
         return { at: f.geometry.coordinates as [number, number], card: aprsCard(JSON.parse(String(f.properties?.info)) as AprsStation) };
+      });
+      hoverCard('balloons', '270px', (e) => {
+        const f = e.features?.[0];
+        if (!f || f.geometry.type !== 'Point') return undefined;
+        const b = JSON.parse(String(f.properties?.info)) as Balloon;
+        const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+        const lines: [string, string?][] = [[`Weather balloon ${b.id}`], [`${b.model ?? 'Radiosonde'} · ${(b.altM / 1000).toFixed(1)} km${b.vertMps !== undefined ? `, ${b.vertMps > 0 ? 'climbing' : 'falling'} ${Math.abs(b.vertMps).toFixed(1)} m/s` : ''}${b.burst ? ' · burst' : ''}`]];
+        const r = [b.tempC !== undefined ? `${Math.round(b.tempC)}°C` : '', b.humidity !== undefined ? `${Math.round(b.humidity)}% RH` : '', b.speedKmh !== undefined && b.heading !== undefined ? `drifting ${COMPASS[Math.round(b.heading / 45) % 8]} ${Math.round(b.speedKmh)} km/h` : ''].filter(Boolean).join(' · ');
+        if (r) lines.push([r]);
+        lines.push([`Peak ${(b.maxAltM / 1000).toFixed(1)} km${b.minTempC !== undefined ? ` · coldest ${Math.round(b.minTempC)}°C` : ''}`, 'muted']);
+        lines.push([[b.freqMhz ? `${b.freqMhz.toFixed(3)} MHz` : '', b.sats !== undefined ? `${b.sats} GPS sats` : '', b.battV !== undefined ? `battery ${b.battV.toFixed(1)} V` : '', `last heard ${fmtTime(b.lastSeen)}`].filter(Boolean).join(' · '), 'muted']);
+        return { at: f.geometry.coordinates as [number, number], card: card(lines) };
       });
       m.addSource('uat-gs', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       m.addLayer({ id: 'uat-gs', type: 'circle', source: 'uat-gs', paint: { 'circle-radius': 5, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': '#5ab0ff', 'circle-stroke-width': 1.5 } });
@@ -599,6 +616,9 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
           'text-halo-width': 1.2,
         },
       });
+      // Highlight ring for "show on the map" from a feed card (animated in the pulse loop below).
+      m.addSource('focus', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      m.addLayer({ id: 'focus-ring', type: 'circle', source: 'focus', paint: { 'circle-radius': 14, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': '#e6e9ee', 'circle-stroke-width': 2, 'circle-stroke-opacity': 0.9 } });
       setReady(true);
       // Subtle pulse on the listening dot: the halo grows and fades every 2.4 s.
       if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -607,6 +627,17 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
           pulse = requestAnimationFrame(tick);
           if (!onScreen.current || document.hidden || t - lastFrame < PULSE_FRAME_MS) return;
           lastFrame = t;
+          if (focusUntil.current) {
+            const left = focusUntil.current - Date.now();
+            if (left <= 0) {
+              focusUntil.current = 0;
+              (m.getSource('focus') as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: [] });
+            } else if (m.getLayer('focus-ring')) {
+              const k = (t % 1200) / 1200;
+              m.setPaintProperty('focus-ring', 'circle-radius', 10 + 14 * k);
+              m.setPaintProperty('focus-ring', 'circle-stroke-opacity', Math.min(1, left / 1500) * (1 - k * 0.6));
+            }
+          }
           const p = (t % 2400) / 2400;
           if (approx.current) {
             if (m.getLayer('home')) m.setPaintProperty('home', 'circle-opacity', 0.22 + 0.13 * Math.sin(p * 2 * Math.PI));
@@ -698,6 +729,73 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
     const t = setInterval(draw, 60_000);
     return () => clearInterval(t);
   }, [ready, tracks, trails]);
+
+  // "Show on the map" from a feed card: fly to the object (its live position if it's still on the map) and ring it.
+  useEffect(() => {
+    const m = map.current;
+    if (!ready || !m) return;
+    return onMapFocus((f) => {
+      const snap = snapRef.current;
+      const [kind, key] = (f.ref ?? '').split(/:(.*)/s);
+      let at: [number, number] | undefined;
+      if (kind === 'air') {
+        const a = snap?.aircraft.find((x) => x.hex === key);
+        if (a?.lat !== undefined && a.lon !== undefined) at = [a.lon, a.lat];
+      } else if (kind === 'sea') {
+        const v = snap?.vessels.find((x) => String(x.mmsi) === key);
+        if (v?.lat !== undefined && v.lon !== undefined) at = [v.lon, v.lat];
+      } else if (kind === 'aprs') {
+        const st = snap?.aprs?.find((x) => x.call === key);
+        if (st?.lat !== undefined && st.lon !== undefined) at = [st.lon, st.lat];
+      } else if (kind === 'balloon') {
+        const b = snap?.balloons?.find((x) => x.id === key);
+        if (b) at = [b.lon, b.lat];
+      } else if (kind === 'site') {
+        const st = SITES.find((x) => x.id === key);
+        if (st) at = [st.lon, st.lat];
+      }
+      at ??= f.lat !== undefined && f.lon !== undefined ? [f.lon, f.lat] : undefined;
+      if (!at) return;
+      setLayer('live');
+      el.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      m.flyTo({ center: at, zoom: Math.min(m.getMaxZoom(), Math.max(m.getZoom(), 10)), duration: 900 });
+      (m.getSource('focus') as GeoJSONSource | undefined)?.setData({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: at } });
+      focusUntil.current = Date.now() + 8000;
+    });
+  }, [ready]);
+
+  // Feed filtered to some types: dim the map layers of the other families (the trails and sites per feature).
+  useEffect(() => {
+    const m = map.current;
+    if (!ready || !m) return;
+    const LAYER_FAMILY: Record<string, string> = { aircraft: 'air', 'uat-gs': 'air', ships: 'sea', aids: 'sea', 'aid-labels': 'sea', balloons: 'wx', 'balloon-tracks': 'wx', 'balloon-labels': 'wx', aprs: 'ham', 'aprs-labels': 'ham' };
+    const PER_FEATURE: Record<string, unknown> = {
+      'trails-line': ['match', ['get', 'kind'], 'sea', 'sea', 'ham', 'ham', 'air'],
+      'trails-dot': ['match', ['get', 'kind'], 'sea', 'sea', 'ham', 'ham', 'air'],
+      sites: ['match', ['get', 'kind'], 'atc', 'air', 'fm', 'bcast', 'nws', 'wx', 'ais', 'sea', 'bcast'],
+      'site-labels': ['match', ['get', 'kind'], 'atc', 'air', 'fm', 'bcast', 'nws', 'wx', 'ais', 'sea', 'bcast'],
+    };
+    const PROPS: Record<string, string[]> = { circle: ['circle-opacity', 'circle-stroke-opacity'], symbol: ['icon-opacity', 'text-opacity'], line: ['line-opacity'] };
+    const DIM = 0.12;
+    const original = new Map<string, unknown>();
+    return onMapFilter((fams) => {
+      for (const id of [...Object.keys(LAYER_FAMILY), ...Object.keys(PER_FEATURE)]) {
+        const type = m.getLayer(id)?.type;
+        if (!type) continue;
+        for (const prop of PROPS[type] ?? []) {
+          const key = `${id}|${prop}`;
+          if (!original.has(key)) original.set(key, m.getPaintProperty(id, prop as never) ?? 1);
+          const orig = original.get(key);
+          let value: unknown = orig;
+          if (fams) {
+            if (LAYER_FAMILY[id]) value = fams.includes(LAYER_FAMILY[id] as never) ? orig : ['*', orig, DIM];
+            else value = ['*', orig, ['case', ['in', PER_FEATURE[id], ['literal', fams]], 1, DIM]];
+          }
+          m.setPaintProperty(id, prop as never, value as never);
+        }
+      }
+    });
+  }, [ready]);
 
   // Weather tab: the broadcast radar drawn on the live map at its own coverage box, with the box outlined.
   const radar = overlays.radar;
