@@ -1028,6 +1028,7 @@ async function readTrain(file: string, ms?: number): Promise<{ title: string; bo
   return { title: 'Train passing', body: `A ${ms ? `${ms} ms ` : ''}data burst from a train's end-of-train device (the box on the last car that reports brake pressure), too noisy to decode.` };
 }
 
+const lastTrainCard = new Map<number, number>(); // EOT unit → when its card was posted
 /** Posts a burst to the feed (text only: decoded signals keep no audio); returns the end-of-train unit when it decoded. */
 async function postTrain(b: TrainBurst): Promise<number | undefined> {
   logRaw('trains', 'burst', JSON.stringify(b), b.at);
@@ -1042,6 +1043,9 @@ async function postTrain(b: TrainBurst): Promise<number | undefined> {
     return undefined;
   }
   const p = b.packets?.[0];
+  // A train's device repeats itself every minute or so: one card per train, not per burst.
+  if (p && b.at - (lastTrainCard.get(p.unit) ?? 0) < 20 * 60_000) return p.unit;
+  if (p) lastTrainCard.set(p.unit, b.at);
   const t = p
     ? { title: `Train passing · EOT ${p.unit}`, body: describeEot(p), unit: p.unit }
     : { title: 'Train passing', body: `A ${b.ms} ms data burst from a train's end-of-train device (the box on the last car that reports brake pressure), too noisy to decode.`, unit: undefined };
