@@ -21,6 +21,15 @@
       ]
     },
     {
+      "id": "atc", "name": "ATC (133.9 slice)", "freqMhz": 133.9, "minutes": 0.5,
+      "comment": "Second airband slice: channels the survey keeps finding around 133.9-134.5 MHz; clips labelled by frequency until named.",
+      "image": "ghcr.io/rtl-airband/rtlsdr-airband:v7.0.1",
+      "binds": [
+        "/mnt/data/supervisor/share/airwaves/app/deploy/atc2/rtl_airband.conf:/app/rtl_airband.conf:ro",
+        "/mnt/data/supervisor/media/airwaves/atc:/recordings"
+      ]
+    },
+    {
       "id": "ais", "name": "Ships", "freqMhz": 162.0, "minutes": 0.5,
       "image": "ghcr.io/jvde-github/ais-catcher:v0.71",
       "cmd": ["-u", "127.0.0.1", "4100"]
@@ -135,6 +144,14 @@
         "/mnt/data/supervisor/share/airwaves/app/deploy/rail/rtl_airband.conf:/app/rtl_airband.conf:ro",
         "/mnt/data/supervisor/media/airwaves/rail:/recordings"
       ]
+    },
+    {
+      "id": "probe", "name": "Identify (beta)", "freqMhz": 500, "minutes": 1, "runsOnce": true, "beta": true,
+      "comment": "BETA: 45 s on one channel the survey keeps finding (a different one each visit), classified as voice, data/tones or a bare carrier, with a 20 s sample kept 24 h (/api/survey). Railroad 161.5125 and 940.8625 (ATCS?), business 452-462 MHz, the 146.95 ham repeater, marine 161.75.",
+      "image": "ghcr.io/sdr-enthusiasts/docker-adsb-ultrafeeder:latest-build-845",
+      "entrypoint": ["sh", "-c"],
+      "cmd": ["set -- 161512500 940862500 456037500 461975000 453150000 460337500 452175000 146950000 161750000; i=$(( $(date +%s) / 600 % $# + 1 )); eval f=\\${$i}; k=$((f / 1000)); timeout 45 rtl_fm -f $f -M fm -s 12k -g 44.5 /out/probe_\"$k\"_${TS}.raw; exit 0"],
+      "binds": ["/mnt/data/supervisor/share/airwaves/probe:/out"]
     },
     {
       "id": "survey", "name": "Survey (beta)", "freqMhz": 500, "minutes": 2.5, "everyMinutes": 360, "runsOnce": true, "beta": true,

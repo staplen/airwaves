@@ -18,7 +18,8 @@ import { describeCar, TireGrouper, tireReading } from './tires.ts';
 import { loadGroundStations } from './groundstations.ts';
 import { AprsState, ingestAprsFiles, tcpLines, UatState } from './extra.ts';
 import { parseAcarsdec } from './acarsdec.ts';
-import { ingestSurvey, surveyReport, type SurveyState } from './survey.ts';
+import { addProbe, ingestSurvey, surveyReport, type SurveyState } from './survey.ts';
+import { ingestProbes } from './probe.ts';
 import type { AprsPacket } from './aprs.ts';
 import { describeAprs, weatherLine } from './aprstext.ts';
 import { approxHome, randomOffset, type Offset } from './privacy.ts';
@@ -46,6 +47,7 @@ const ACARS_UDP_PORT = Number(env.ACARS_UDP_PORT ?? 5551); // acarsdec (plain VH
 const UAT_JSON_PORT = Number(env.UAT_JSON_PORT ?? 30979); // dump978-fa, while the UAT slot runs
 const UAT_RAW_PORT = Number(env.UAT_RAW_PORT ?? 30978);
 const APRS_DIR = env.APRS_DIR ?? join(dirname(env.DATA_DIR ?? 'data'), 'aprs'); // multimon-ng APRS lines
+const PROBE_DIR = env.PROBE_DIR ?? join(dirname(env.DATA_DIR ?? 'data'), 'probe'); // beta identify-probe recordings
 const CLIPS_ROOT = env.CLIPS_ROOT; // folder holding atc/, noaa/ and radio/ clip folders
 // rtl_power sweeps land here; default is a "spectrum" folder next to DATA_DIR (/airwaves/spectrum on the Pi).
 const SPECTRUM_DIR = env.SPECTRUM_DIR ?? join(dirname(env.DATA_DIR ?? 'data'), 'spectrum');
@@ -86,6 +88,7 @@ const SOURCES: Omit<SourceStatus, 'lastHeard' | 'running'>[] = [
   { id: 'acars', name: 'ACARS', family: 'air', freqMhz: 130.8 },
   { id: 'rail', name: 'Rail radio', family: 'rail', freqMhz: 160.6875 },
   { id: 'survey', name: 'Survey', family: 'bcast', freqMhz: 500 },
+  { id: 'probe', name: 'Identify', family: 'bcast', freqMhz: 500 },
 ];
 
 const ATC_NAMES: Record<string, { name: string; freq: string }> = {
@@ -280,6 +283,11 @@ function slotStats(now: number, aircraft: Aircraft[]): Record<string, SlotStat> 
       })(),
       acars: { value: store.countSightings(day, 'acars').toLocaleString('en-US'), label: 'flights on VHF ACARS', short: 'flights', brief: '130–131.5 MHz', detail: 'plain ACARS beside VDL2 datalink' },
       rail: railStat(),
+      probe: (() => {
+        const ps = Object.values(survey.probes ?? {});
+        const named = ps.filter((x) => x.latest.guess !== 'idle').length;
+        return { value: String(ps.length), label: 'channels identified', short: 'channels', brief: `${named} active`, detail: ps.length ? ps.slice(-3).map((x) => `${x.latest.mhz.toFixed(3)}: ${x.latest.guess}`).join(' · ') : 'listening to survey finds, one per visit' };
+      })(),
       survey: (() => {
         const found = surveyReport(survey).length;
         const runs = Object.values(survey.surveys).reduce((a, b) => a + b, 0);
@@ -708,7 +716,9 @@ async function onClip(c: Clip) {
     heard('atc', c.ts);
     store.sight(localDay(c.ts), 'atc', c.file, c.ts);
     atcHeard.set(c.template, Math.max(atcHeard.get(c.template) ?? 0, c.ts));
-    const ch = ATC_NAMES[c.template] ?? { name: c.template.replace(/_/g, ' '), freq: '' };
+    // AIR_<kHz>: channels from the survey without a confirmed name yet, labelled by frequency.
+    const air = /^AIR_(\d{6})$/.exec(c.template);
+    const ch = ATC_NAMES[c.template] ?? (air ? { name: `Airband ${(Number(air[1]) / 1000).toFixed(3)}`, freq: (Number(air[1]) / 1000).toFixed(3) } : { name: c.template.replace(/_/g, ' '), freq: '' });
     const site = SITES.find((st) => st.channels.some((x) => x.atc === c.template));
     publishFeed({ ts: c.ts, family: 'air', kind: 'ATC', title: ch.name, meta: `${ch.freq}`, body: '', clip: url, peaks, lat: site?.lat, lon: site?.lon, ref: site ? `site:${site.id}` : undefined });
   } else if (c.dir === 'noaa') {
@@ -868,7 +878,7 @@ const server = createServer((req, res) => {
   }
   if (p === '/api/survey') {
     // Beta: channels the fine sweeps keep finding (frequencies only, nothing decoded).
-    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ surveys: survey.surveys, channels: surveyReport(survey) }));
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ surveys: survey.surveys, channels: surveyReport(survey), probes: survey.probes ?? {} }));
     return;
   }
   if (p === '/api/overlays') {
@@ -898,7 +908,7 @@ async function housekeeping() {
   const rl = await rawLog.rotate(now);
   if (rl.deleted) console.log(`rawlog: ${rl.zipped} hours gzipped, ${rl.deleted} old files deleted`);
   const files = CLIPS_ROOT
-    ? (await purgeOldFiles(join(CLIPS_ROOT, 'atc'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'noaa'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'radio'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'trains'), CLIP_RETENTION_MS, ['.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'rail'), CLIP_RETENTION_MS, ['.mp3', '.wav']))
+    ? (await purgeOldFiles(join(CLIPS_ROOT, 'atc'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'noaa'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'radio'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'trains'), CLIP_RETENTION_MS, ['.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'rail'), CLIP_RETENTION_MS, ['.mp3', '.wav'])) + (await purgeOldFiles(join(CLIPS_ROOT, 'probe'), CLIP_RETENTION_MS, ['.wav']))
     : 0;
   const art = await purgeOldFiles(ART_DIR, CLIP_RETENTION_MS, ['.jpg', '.jpeg', '.png']);
   const maps = await purgeOldFiles(join(HD_DIR, 'maps'), 86_400_000, ['.png', '.jpg', '.jpeg', '.txt', '.gif']);
@@ -919,6 +929,14 @@ async function ingestFiles() {
     store.setState('survey', survey);
   }
   if (await ingestAprsFiles(APRS_DIR, onAprs)) heard('aprs', now);
+  // Beta identify probe: classify what the survey's unknown channels carry.
+  const probes = await ingestProbes(PROBE_DIR, CLIPS_ROOT ? join(CLIPS_ROOT, 'probe') : undefined);
+  for (const r of probes) {
+    heard('probe', r.at);
+    rawLog.write('probe', `${r.mhz.toFixed(3)} ${r.guess}`, JSON.stringify(r), r.at);
+    addProbe(survey, r);
+  }
+  if (probes.length) store.setState('survey', survey);
   const bursts = await ingestTrains(TRAINS_DIR);
   if (bursts.length) heard('trains', now);
   if (bursts.length) {

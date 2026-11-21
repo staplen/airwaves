@@ -1,5 +1,6 @@
 import { readdir, readFile, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { ProbeResult } from './probe.ts';
 
 // Beta "survey": fine rtl_power sweeps (12.5 kHz bins, one-second passes for ~20 s per band) of bands where we might
 // find more to decode. Each sweep is max-held per bin (bursty signals count) and compared with the band's noise
@@ -60,6 +61,8 @@ export interface SurveyChannel {
 }
 export interface SurveyState {
   v?: number; // format version (2: TV and broadband filtered)
+  /** Identify-probe results per probed frequency (kHz key): the latest run and a tally of guesses. */
+  probes?: Record<string, { latest: ProbeResult; runs: number; guesses: Record<string, number> }>;
   surveys: Record<string, number>; // band label → survey count
   channels: Record<string, SurveyChannel>; // key = channel MHz (3 decimals)
 }
@@ -145,6 +148,14 @@ export async function ingestSurvey(dir: string, state: SurveyState, onRaw?: (fil
     }
   }
   return n;
+}
+
+export function addProbe(state: SurveyState, r: ProbeResult): void {
+  const key = String(Math.round(r.mhz * 1000));
+  const p = ((state.probes ??= {})[key] ??= { latest: r, runs: 0, guesses: {} });
+  p.latest = r;
+  p.runs++;
+  p.guesses[r.guess] = (p.guesses[r.guess] ?? 0) + 1;
 }
 
 /** The interesting part: channels seen in more than one survey (or once, strongly), most regular first. */
