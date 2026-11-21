@@ -7,7 +7,7 @@ import { connect as mqttConnect } from 'mqtt';
 import type { Aircraft, AisFixed, Balloon, FeedItem, Overlays, Pin, PinMetric, RadioStation, SchedulerState, SensorInfo, SlotStat, Snapshot, SourceStatus, SpectrumHeat, Tracks, Vessel } from '../../shared/types.ts';
 import { AdsbSource } from './adsb.ts';
 import { AisDecoder, shipTypeName } from './ais.ts';
-import { ClipWatcher, type Clip } from './clips.ts';
+import { ClipWatcher, existingClips, type Clip } from './clips.ts';
 import { parseSame } from './eas.ts';
 import { ingestSpectrum, purgeOldFiles, SPECTRUM_BINS } from './housekeeping.ts';
 import { ingestHdRadio } from './hdradio.ts';
@@ -735,6 +735,15 @@ async function onClip(c: Clip) {
   }
 }
 if (CLIPS_ROOT) new ClipWatcher({ atc: join(CLIPS_ROOT, 'atc'), noaa: join(CLIPS_ROOT, 'noaa'), rail: join(CLIPS_ROOT, 'rail') }, (c) => void onClip(c)).start();
+// Rail radio recordings made while it was a beta slot (not posted then): post them once, in order.
+if (CLIPS_ROOT && !store.getState('railBackfilled')) {
+  store.setState('railBackfilled', true);
+  void (async () => {
+    const clips = await existingClips('rail', join(CLIPS_ROOT, 'rail'));
+    for (const c of clips) await onClip(c);
+    if (clips.length) console.log(`rail: backfilled ${clips.length} earlier recording(s) into the feed`);
+  })();
+}
 // Clips filed before waveforms existed (or while ffmpeg was missing): fill them in once, in the background.
 void (async () => {
   let n = 0;

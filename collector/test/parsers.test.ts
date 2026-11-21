@@ -240,3 +240,18 @@ test('multi-block ACARS messages are joined before translating', async () => {
   assert.equal(c.points?.length, 1);
   assert.equal(c.points?.[0].altFt, 17754);
 });
+
+test('existing rail recordings are listed oldest first, empty ones skipped', async () => {
+  const { existingClips } = await import('../src/clips.ts');
+  const { mkdtemp, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'rail-'));
+  await writeFile(join(dir, 'RAIL_160290_20261121_034915.mp3'), 'x'.repeat(100));
+  await writeFile(join(dir, 'RAIL_160290_20261121_021000.mp3'), 'x'.repeat(100));
+  await writeFile(join(dir, 'RAIL_161100_20261121_050000.mp3'), ''); // empty: no audio
+  await writeFile(join(dir, 'notes.txt'), 'x');
+  const clips = await existingClips('rail', dir);
+  assert.deepEqual(clips.map((c) => [c.template, c.file.slice(12, 27)]), [['RAIL_160290', '20261121_021000'], ['RAIL_160290', '20261121_034915']]);
+  assert.equal(clips[0].ts, Date.UTC(2026, 10, 21, 2, 10, 0));
+});

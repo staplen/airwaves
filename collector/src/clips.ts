@@ -15,6 +15,18 @@ function parseTs(d: string, t: string): number {
   return Date.UTC(+d.slice(0, 4), +d.slice(4, 6) - 1, +d.slice(6, 8), +t.slice(0, 2), +t.slice(2, 4), +t.slice(4, 6));
 }
 
+/** The clips already in a folder (oldest first), for a one-off backfill; empty recordings are left out. */
+export async function existingClips(dirName: string, path: string): Promise<Clip[]> {
+  const out: Clip[] = [];
+  for (const file of await readdir(path).catch(() => [] as string[])) {
+    const m = file.match(NAME);
+    if (!m) continue;
+    const bytes = (await stat(`${path}/${file}`).catch(() => undefined))?.size ?? 0;
+    if (bytes > 0) out.push({ dir: dirName, file, template: m[1], ts: parseTs(m[2], m[3]), bytes });
+  }
+  return out.sort((a, b) => a.ts - b.ts);
+}
+
 /**
  * Polls folders for new audio clips. Polling (not fs.watch) because the folders are
  * bind mounts on the Pi, where change events are unreliable. A file is reported once
