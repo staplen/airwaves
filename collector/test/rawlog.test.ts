@@ -22,7 +22,7 @@ test('writes hourly files, gzips finished hours and deletes old ones', async () 
   const lines = gunzipSync(await readFile(join(dir, 'vdl2', '20261120-14.jsonl.gz'))).toString().trim().split('\n');
   assert.deepEqual(JSON.parse(lines[0]), { ts: h0, kind: 'acars H1', text: '{"a":1}' });
   // Past the window: deleted.
-  const old = new Date(Date.now() - 80 * 3600_000);
+  const old = new Date(h1 - 80 * 3600_000); // relative to the test's clock, not today's
   await utimes(join(dir, 'sonde', '20261120-15.jsonl'), old, old);
   assert.equal((await log.rotate(h1 + 2000)).deleted, 1);
   assert.deepEqual((await log.list()).map((f) => f.path), ['vdl2/20261120-15.jsonl', 'vdl2/20261120-14.jsonl.gz']);
