@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import type { FeedItem } from '../../../shared/types.ts';
 import { FAMILY_COLOR } from '../bands.ts';
 import { ClipPlayer } from './ClipPlayer.tsx';
+import { WhenRange } from './When.tsx';
 
 // Runs of the same kind fold into one collapsed card: by default one card per slot visit (items close together),
 // and per hour or so for kinds that report once a loop. `gap` = the most time between neighbouring items;
@@ -61,18 +62,6 @@ export function bundleRows(items: FeedItem[]): Row[] {
   return rows;
 }
 
-const time = (ts: number, sec = false) => new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: sec ? '2-digit' : undefined });
-
-/** "5:34–5:36 PM", "11:58 AM–12:04 PM", or just "5:38 PM" when the whole run is within one minute (or second, for ATC). */
-export function timeRange(from: number, to: number, sec = false): string {
-  const a = time(from, sec);
-  const b = time(to, sec);
-  if (a === b) return b;
-  const suffix = (t: string) => t.match(/\s?[AP]\.?M\.?$/i)?.[0] ?? '';
-  const sa = suffix(a);
-  return sa && sa === suffix(b) ? `${a.slice(0, -sa.length)}–${b}` : `${a}–${b}`;
-}
-
 /** "United 210 · Republic 3698 ×2 · +4 more": who is in the bundle, most frequent first. */
 function whoLine(items: FeedItem[], max = 4): string {
   const counts = new Map<string, number>();
@@ -114,7 +103,7 @@ export function BundleCard({ items, renderItem }: { items: FeedItem[]; renderIte
             {items.length} {rule.noun[1]}
           </b>
           <span className="mono muted" style={{ fontSize: 11, marginLeft: 'auto' }}>
-            {timeRange(oldest, newest, sec)}
+            <WhenRange from={oldest} to={newest} sec={sec} />
           </span>
         </div>
         {titles.size > 1 || first.kind === 'ATC' || first.kind === 'Rail radio' ? (

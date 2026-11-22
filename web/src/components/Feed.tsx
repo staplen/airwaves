@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { When } from './When.tsx';
 import type { Family, FeedItem } from '../../../shared/types.ts';
 import { FAMILY_COLOR, FAMILY_LABEL } from '../bands.ts';
 import { BundleCard, bundleRows, kindLabel } from './Bundle.tsx';
@@ -53,11 +54,10 @@ function highlight(text: string, words: string[]): ReactNode {
 // Older items had the collector's UTC time baked into meta ("119.100 · 20:28:11"); drop it.
 const LEGACY_TIME = /\s·\s\d{1,2}:\d{2}(:\d{2})?$/;
 
-/** Frequency or source, then the time in the viewer's own time zone. */
-function metaLine(item: FeedItem): string {
-  const time = new Date(item.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: item.kind.startsWith('ATC') || item.kind === 'Rail radio' ? '2-digit' : undefined });
-  return `${item.meta.replace(LEGACY_TIME, '')} · ${time}`;
-}
+/** Frequency or source, without the time (the card shows that itself). */
+const metaText = (item: FeedItem) => item.meta.replace(LEGACY_TIME, '');
+
+const secOf = (item: FeedItem) => item.kind.startsWith('ATC') || item.kind === 'Rail radio';
 
 const listJoin = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} or ${xs[xs.length - 1]}`);
 
@@ -215,7 +215,7 @@ export const Feed = memo(function Feed({ items }: { items: FeedItem[] }) {
           <div className="catch-head">
             <span className="catch-kind" style={{ color: FAMILY_COLOR[i.family] }}>{highlight(kindLabel(i.kind), words)}</span>
             <b style={{ fontSize: 13 }}>{highlight(i.title, words)}</b>
-            <span className="mono muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{highlight(metaLine(i), words)}</span>
+            <span className="mono muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{highlight(metaText(i), words)}{metaText(i) ? ' · ' : ''}<When ts={i.ts} sec={secOf(i)} /></span>
             {(i.ref || (i.lat !== undefined && i.lon !== undefined)) && (
               <button type="button" className="locate" aria-label={`Show ${i.title} on the map`} title="Show on the map" onClick={() => focusOnMap({ ref: i.ref, lat: i.lat, lon: i.lon, label: i.title })}>
                 <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M7 1.5a4 4 0 0 0-4 4c0 3 4 7 4 7s4-4 4-7a4 4 0 0 0-4-4Z" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><circle cx="7" cy="5.5" r="1.4" fill="currentColor" /></svg>

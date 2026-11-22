@@ -8,7 +8,7 @@ import type { Aircraft, AisFixed, AprsStation, Balloon, Home, Overlays, Snapshot
 import { apiUrl, isStatic } from '../api.ts';
 import { ago } from '../live.ts';
 import { sitesFC } from '../sites.ts';
-import { timeRange } from './Bundle.tsx';
+import { timeRange } from './When.tsx';
 import { onMapFilter, onMapFocus } from '../mapEvents.ts';
 import { SITES } from '../../../shared/sites.ts';
 import { AGE_OPACITY, TRAIL_COLOR, tracksFC } from '../trails.ts';
