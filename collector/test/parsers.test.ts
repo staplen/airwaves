@@ -255,3 +255,12 @@ test('existing rail recordings are listed oldest first, empty ones skipped', asy
   assert.deepEqual(clips.map((c) => [c.template, c.file.slice(12, 27)]), [['RAIL_160290', '20261121_021000'], ['RAIL_160290', '20261121_034915']]);
   assert.equal(clips[0].ts, Date.UTC(2026, 10, 21, 2, 10, 0));
 });
+
+test('security-system sensors are recognised (hidden from the feed); weather sensors are not', async () => {
+  const { isSecurityDevice } = await import('../src/rtl433.ts');
+  assert.ok(isSecurityDevice('DSC-Security', { closed: 0, event: 1 }));
+  assert.ok(isSecurityDevice('DSC Security', {}));
+  assert.ok(isSecurityDevice('Some-Sensor', { reed_open: 1 }));
+  assert.ok(!isSecurityDevice('LaCrosse-TX141Bv3', { temperature_C: 13.7, battery_ok: 0 }));
+  assert.ok(!isSecurityDevice('Acurite-Tower', { temperature_C: 10, humidity: 50 }));
+});

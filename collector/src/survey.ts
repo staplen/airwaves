@@ -23,7 +23,9 @@ const BANDS: { lo: number; hi: number; use: string; note?: string }[] = [
   { lo: 150.8, hi: 152.0, use: 'Land mobile' },
   { lo: 152.0, hi: 152.85, use: 'Paging / land mobile', note: 'pagers are not decoded on purpose (personal data)' },
   { lo: 152.85, hi: 157.0, use: 'Public safety / land mobile' },
-  { lo: 156.0, hi: 162.0, use: 'Marine VHF' },
+  { lo: 156.0, hi: 157.45, use: 'Marine VHF' },
+  { lo: 157.45, hi: 159.81, use: 'Land mobile / public safety' },
+  { lo: 161.565, hi: 162.025, use: 'Marine VHF (coast stations)' },
   { lo: 157.45, hi: 158.0, use: 'Paging', note: 'not decoded on purpose' },
   { lo: 159.81, hi: 161.565, use: 'Railroad (AAR channels)' },
   { lo: 161.9, hi: 162.1, use: 'AIS' },
@@ -39,13 +41,14 @@ const BANDS: { lo: number; hi: number; use: string; note?: string }[] = [
   { lo: 462.55, hi: 462.725, use: 'FRS / GMRS' },
   { lo: 467.55, hi: 467.725, use: 'FRS / GMRS' },
   { lo: 450.0, hi: 470.0, use: 'Land mobile' },
-  { lo: 896.0, hi: 901.0, use: 'Railroad ATCS / business (900 MHz)' },
+  { lo: 896.0, hi: 901.0, use: 'Business / railroad ATCS (900 MHz)' },
   { lo: 902.0, hi: 928.0, use: 'ISM 900 (meters, sensors)' },
   { lo: 929.0, hi: 932.0, use: 'Paging', note: 'not decoded on purpose' },
-  { lo: 935.0, hi: 941.0, use: 'Railroad ATCS / business (900 MHz)' },
+  { lo: 935.0, hi: 940.0, use: 'Business / railroad ATCS (900 MHz)' },
+  { lo: 940.0, hi: 941.0, use: 'Narrowband PCS (two-way paging)', note: 'not decoded on purpose' },
   { lo: 941.0, hi: 960.0, use: 'Fixed links / studio-transmitter' },
 ];
-// Narrowest match wins (railroad and AIS sit inside the marine band, paging inside land mobile…).
+// Narrowest match wins (AIS sits inside the marine coast band, NOAA inside federal, paging inside land mobile…).
 const BY_WIDTH = [...BANDS].sort((a, b) => a.hi - a.lo - (b.hi - b.lo));
 export const bandOf = (mhz: number) => BY_WIDTH.find((b) => mhz >= b.lo && mhz < b.hi);
 
@@ -163,5 +166,7 @@ export function surveyReport(state: SurveyState) {
   return Object.values(state.channels)
     .filter((c) => !isTv(c.mhz) && (c.seen >= 2 || c.peakDb >= 20))
     .sort((a, b) => b.seen / b.surveys - a.seen / a.surveys || b.peakDb - a.peakDb)
-    .slice(0, 300);
+    .slice(0, 300)
+    // Labelled from the current table, not the one in force when the channel was first seen.
+    .map((c) => ({ ...c, use: bandOf(c.mhz)?.use, note: bandOf(c.mhz)?.note }));
 }

@@ -25,4 +25,8 @@ test('a very strong narrow signal is kept despite its skirts; bands label by the
   assert.equal(bandOf(160.23)?.use, 'Railroad (AAR channels)');
   assert.equal(bandOf(161.975)?.use, 'AIS');
   assert.equal(bandOf(162.45)?.use, 'NOAA Weather Radio');
+  assert.equal(bandOf(156.8)?.use, 'Marine VHF');
+  assert.equal(bandOf(158.7875)?.use, 'Land mobile / public safety');
+  assert.equal(bandOf(161.75)?.use, 'Marine VHF (coast stations)');
+  assert.equal(bandOf(940.8625)?.note, 'not decoded on purpose');
 });

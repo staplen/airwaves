@@ -30,7 +30,7 @@ import { SITES } from '../../shared/sites.ts';
 import { TrackStore } from './tracks.ts';
 import { RawTap, tryJson, vdl2Kind } from './rawtap.ts';
 import { RawLog } from './rawlog.ts';
-import { describeSensor, parseRtl433 } from './rtl433.ts';
+import { describeSensor, isSecurityDevice, parseRtl433 } from './rtl433.ts';
 import { Store, localDay } from './store.ts';
 import { AcarsAssembler, parseVdl2 } from './vdl2.ts';
 
@@ -101,6 +101,10 @@ const ATC_NAMES: Record<string, { name: string; freq: string }> = {
   IAD_TWR_E: { name: 'IAD Tower', freq: '120.100' },
   IAD_TWR_C: { name: 'IAD Tower', freq: '120.250' },
   APP_IAD_W: { name: 'Potomac Approach (IAD)', freq: '120.450' },
+  // 133.9 slice: unofficial frequency lists put these on Washington Center (en-route), not Potomac; unconfirmed, but named anyway.
+  AIR_133900: { name: 'Washington Center', freq: '133.900' },
+  AIR_133975: { name: 'Washington Center', freq: '133.975' },
+  AIR_134500: { name: 'Washington Center', freq: '134.500' },
 };
 
 const startedAt = Date.now();
@@ -599,6 +603,10 @@ function onRtl433(raw: string) {
   }
   // Other sensors: remember the latest reading (for pinning), post the first of the day, then at most hourly per device.
   const key = `${e.model}:${e.id}`;
+  if (isSecurityDevice(e.model, e.fields)) {
+    store.sight(day, 'sensor', key, e.ts); // counted, never shown (says when a neighbour's door opens)
+    return;
+  }
   const num = (k: string) => (typeof e.fields[k] === 'number' ? (e.fields[k] as number) : undefined);
   const tc = num('temperature_C');
   const prev = sensors.get(key);
@@ -1057,6 +1065,14 @@ if (!store.getState('aprsTextV2')) {
     store.setState('aprsTextV2', true);
     if (n) console.log(`aprs: reworded ${n} earlier card(s)`);
   }, 5000).unref();
+}
+
+// Security-sensor cards posted before they were hidden: remove them once.
+if (!store.getState('securityCardsRemoved')) {
+  let n = 0;
+  for (const r of store.feedOfKind('Sensor')) if (isSecurityDevice(r.title.replace(/ /g, '-'), {})) (store.deleteFeedItem(r.id), n++);
+  store.setState('securityCardsRemoved', true);
+  if (n) console.log(`sensors: removed ${n} security-sensor card(s)`);
 }
 
 // ---- trains: end-of-train device bursts on 457.9375 MHz -------------------------------------

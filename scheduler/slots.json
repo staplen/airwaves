@@ -22,7 +22,7 @@
     },
     {
       "id": "atc", "name": "ATC (133.9 slice)", "freqMhz": 133.9, "minutes": 0.5,
-      "comment": "Second airband slice: channels the survey keeps finding around 133.9-134.5 MHz; clips labelled by frequency until named.",
+      "comment": "Second airband slice: channels the survey keeps finding around 133.9-134.5 MHz (133.900/133.975/134.500 likely Washington Center); others labelled by frequency.",
       "image": "ghcr.io/rtl-airband/rtlsdr-airband:v7.0.1",
       "binds": [
         "/mnt/data/supervisor/share/airwaves/app/deploy/atc2/rtl_airband.conf:/app/rtl_airband.conf:ro",
@@ -147,10 +147,10 @@
     },
     {
       "id": "probe", "name": "Identify (beta)", "freqMhz": 500, "minutes": 1, "runsOnce": true, "beta": true,
-      "comment": "BETA: 45 s on one channel the survey keeps finding (a different one each visit), classified as voice, data/tones or a bare carrier, with a 20 s sample kept 24 h (/api/survey). Railroad 161.5125 and 940.8625 (ATCS?), business 452-462 MHz, the 146.95 ham repeater, marine 161.75.",
+      "comment": "BETA: 45 s on one channel the survey keeps finding (a different one each visit), classified as voice, data/tones or a bare carrier, with a 20 s sample kept 24 h (/api/survey). Second round (2026-11-22): 460.3375 (mixed so far), the 444.650 ham repeater, 158.7875, 463.325, 451.550, federal 170.575, 155.6875. Dropped after the first round: always idle (161.5125, 146.95), always data or a steady tone (161.75, 452.175, 453.15, 456.0375, 461.975: likely trunking control channels), and 940.8625 (narrowband PCS paging, not decoded on purpose).",
       "image": "ghcr.io/sdr-enthusiasts/docker-adsb-ultrafeeder:latest-build-845",
       "entrypoint": ["sh", "-c"],
-      "cmd": ["set -- 161512500 940862500 456037500 461975000 453150000 460337500 452175000 146950000 161750000; i=$(( $(date +%s) / 600 % $# + 1 )); eval f=\\${$i}; k=$((f / 1000)); timeout 45 rtl_fm -f $f -M fm -s 12k -g 44.5 /out/probe_\"$k\"_${TS}.raw; exit 0"],
+      "cmd": ["set -- 460337500 444650000 158787500 463325000 451550000 170575000 155687500; i=$(( $(date +%s) / 600 % $# + 1 )); eval f=\\${$i}; k=$((f / 1000)); timeout 45 rtl_fm -f $f -M fm -s 12k -g 44.5 /out/probe_\"$k\"_${TS}.raw; exit 0"],
       "binds": ["/mnt/data/supervisor/share/airwaves/probe:/out"]
     },
     {

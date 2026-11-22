@@ -31,6 +31,15 @@ export function parseRtl433(raw: string): Rtl433Event | undefined {
   return { kind, model, id, ts, freqMhz: freq, fields: e };
 }
 
+/**
+ * Security-system devices (door/window contacts, motion sensors, alarm keyfobs): their messages say when someone's
+ * door opens, so they are counted but never shown, like pagers.
+ */
+export function isSecurityDevice(model: string, f: Record<string, unknown>): boolean {
+  if (/\b(DSC|Interlogix|Honeywell|Ademco|2Gig|Visonic|Kerui|Chuango)\b|Security|Door|Window|Motion|Alarm|Contact|\bPIR\b/i.test(model)) return true;
+  return ['closed', 'reed_open', 'contact_open', 'alarm', 'motion', 'tamper'].some((k) => k in f);
+}
+
 /** One-line human summary of a sensor's readings. */
 export function describeSensor(f: Record<string, unknown>): string {
   const parts: string[] = [];

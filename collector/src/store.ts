@@ -99,6 +99,10 @@ export class Store {
     return Number(this.db.prepare('UPDATE feed SET clip = NULL, peaks = NULL WHERE kind = ? AND clip IS NOT NULL').run(kind).changes);
   }
 
+  deleteFeedItem(id: number) {
+    this.db.prepare('DELETE FROM feed WHERE id = ?').run(id);
+  }
+
   setTitleBody(id: number, title: string, body: string) {
     this.db.prepare('UPDATE feed SET title = ?, body = ? WHERE id = ?').run(title, body, id);
   }
