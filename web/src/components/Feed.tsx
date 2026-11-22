@@ -5,7 +5,8 @@ import { FAMILY_COLOR, FAMILY_LABEL } from '../bands.ts';
 import { BundleCard, bundleRows, kindLabel } from './Bundle.tsx';
 import { ClipPlayer } from './ClipPlayer.tsx';
 import { onShowOnly } from '../feedFilter.ts';
-import { focusOnMap, setMapFilter } from '../mapEvents.ts';
+import { setMapFilter } from '../mapEvents.ts';
+import { LocateButton, focusOf } from './Locate.tsx';
 
 const PLACEHOLDER = /^(Transcript coming soon|Latest 60-second clip)/;
 const CLIP_RETENTION_MS = 24 * 3600_000; // matches the collector's audio purge
@@ -216,11 +217,7 @@ export const Feed = memo(function Feed({ items }: { items: FeedItem[] }) {
             <span className="catch-kind" style={{ color: FAMILY_COLOR[i.family] }}>{highlight(kindLabel(i.kind), words)}</span>
             <b style={{ fontSize: 13 }}>{highlight(i.title, words)}</b>
             <span className="mono muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{highlight(metaText(i), words)}{metaText(i) ? ' · ' : ''}<When ts={i.ts} sec={secOf(i)} /></span>
-            {(i.ref || (i.lat !== undefined && i.lon !== undefined)) && (
-              <button type="button" className="locate" aria-label={`Show ${i.title} on the map`} title="Show on the map" onClick={() => focusOnMap({ ref: i.ref, lat: i.lat, lon: i.lon, label: i.title })}>
-                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M7 1.5a4 4 0 0 0-4 4c0 3 4 7 4 7s4-4 4-7a4 4 0 0 0-4-4Z" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><circle cx="7" cy="5.5" r="1.4" fill="currentColor" /></svg>
-              </button>
-            )}
+            {focusOf(i) && <LocateButton targets={[focusOf(i)!]} label={`Show ${i.title} on the map`} />}
           </div>
           {i.body && !PLACEHOLDER.test(i.body) && (
             <div className={i.mono ? 'catch-body mono' : 'catch-body'} style={i.tag === 'Station message' ? { color: 'var(--muted)' } : undefined}>

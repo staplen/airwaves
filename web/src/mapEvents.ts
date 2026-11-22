@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from 'react';
 import type { Family } from '../../shared/types.ts';
 
 // The feed talks to the map through two window events: "show this on the map" (a card's locate button) and
@@ -13,11 +14,12 @@ export interface Focus {
 const FOCUS = 'airwaves:map-focus';
 const FILTER = 'airwaves:map-filter';
 
-export function focusOnMap(f: Focus): void {
-  window.dispatchEvent(new CustomEvent<Focus>(FOCUS, { detail: f }));
+/** One target flies to it; several fit the map around all of them. */
+export function focusOnMap(f: Focus | Focus[]): void {
+  window.dispatchEvent(new CustomEvent<Focus[]>(FOCUS, { detail: Array.isArray(f) ? f : [f] }));
 }
-export function onMapFocus(handler: (f: Focus) => void): () => void {
-  const l = (e: Event) => handler((e as CustomEvent<Focus>).detail);
+export function onMapFocus(handler: (fs: Focus[]) => void): () => void {
+  const l = (e: Event) => handler((e as CustomEvent<Focus[]>).detail);
   window.addEventListener(FOCUS, l);
   return () => window.removeEventListener(FOCUS, l);
 }
@@ -33,4 +35,29 @@ export function onMapFilter(handler: (families: Family[] | null) => void): () =>
   window.addEventListener(FILTER, l);
   handler(lastFilter); // the map may mount after the feed has set its filter
   return () => window.removeEventListener(FILTER, l);
+}
+
+// Where a target is now: the map registers a locator (live object, then where the card says, then the last point of
+// its trail) and says when positions change, so a card shows its pin only while there is somewhere to go.
+type Locator = (f: Focus) => [number, number] | undefined;
+let locator: Locator | null = null;
+const posSubs = new Set<() => void>();
+export function setLocator(fn: Locator | null): void {
+  locator = fn;
+  positionsChanged();
+}
+export function positionsChanged(): void {
+  posSubs.forEach((f) => f());
+}
+const subscribePositions = (fn: () => void) => {
+  posSubs.add(fn);
+  return () => posSubs.delete(fn);
+};
+export function locate(f: Focus): [number, number] | undefined {
+  if (locator) return locator(f);
+  return f.lat !== undefined && f.lon !== undefined ? [f.lon, f.lat] : undefined;
+}
+/** True while at least one target can be shown on the map. */
+export function useLocatable(targets: Focus[]): boolean {
+  return useSyncExternalStore(subscribePositions, () => targets.some((t) => locate(t) !== undefined));
 }

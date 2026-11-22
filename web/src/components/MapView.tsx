@@ -9,7 +9,7 @@ import { apiUrl, isStatic } from '../api.ts';
 import { ago } from '../live.ts';
 import { sitesFC } from '../sites.ts';
 import { timeRange } from './When.tsx';
-import { onMapFilter, onMapFocus } from '../mapEvents.ts';
+import { onMapFilter, onMapFocus, positionsChanged, setLocator, type Focus } from '../mapEvents.ts';
 import { SITES } from '../../../shared/sites.ts';
 import { AGE_OPACITY, TRAIL_COLOR, tracksFC } from '../trails.ts';
 
@@ -367,11 +367,16 @@ function ringsFC(home: Home): FC {
 const PULSE_FRAME_MS = 1000 / 30;
 
 /** Memoised: re-renders when the snapshot changes, not on the app's once-a-second clock. */
+/** Event data on our own moves back to the starting view, so they clear the re-center button. */
+const HOME_MOVE = { home: true };
+
 export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot }) {
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<MlMap>(null);
   const [ready, setReady] = useState(false);
   const centered = useRef(false);
+  // Moved off the starting view (a pan, a zoom, or flying to a feed card's location): offer a way back.
+  const [offHome, setOffHome] = useState(false);
   const [overlays, setOverlays] = useState<Overlays>({});
   const [layer, setLayer] = useState<Layer>('live');
   const [tracks, setTracks] = useState<Tracks>();
@@ -685,7 +690,7 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
       }
       if (!centered.current) {
         centered.current = true;
-        m.jumpTo({ center: [snapshot.home.lon, snapshot.home.lat], zoom: 8.6 });
+        m.jumpTo({ center: [snapshot.home.lon, snapshot.home.lat], zoom: 8.6 }, HOME_MOVE);
       }
     }
   }, [ready, snapshot]);
@@ -730,11 +735,13 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
     return () => clearInterval(t);
   }, [ready, tracks, trails]);
 
-  // "Show on the map" from a feed card: fly to the object (its live position if it's still on the map) and ring it.
+  // "Show on the map" from a feed card: fly to the object (its live position if it's still on the map) and ring it;
+  // from a bundle, fit the map around every place in it and ring each one.
   useEffect(() => {
     const m = map.current;
     if (!ready || !m) return;
-    return onMapFocus((f) => {
+    // Where a card's target is: the live object, else where the card says it happened, else the end of its trail.
+    const find = (f: Focus): [number, number] | undefined => {
       const snap = snapRef.current;
       const [kind, key] = (f.ref ?? '').split(/:(.*)/s);
       let at: [number, number] | undefined;
@@ -755,14 +762,43 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
         if (st) at = [st.lon, st.lat];
       }
       at ??= f.lat !== undefined && f.lon !== undefined ? [f.lon, f.lat] : undefined;
-      if (!at) return;
+      if (!at && f.ref) {
+        const last = tracksRef.current?.tracks.find((t) => t.id === f.ref)?.pts.at(-1);
+        if (last) at = [last[0], last[1]];
+      }
+      return at;
+    };
+    setLocator(find);
+    const off = onMapFocus((fs) => {
+      const seen = new Set<string>();
+      const pts = fs.map(find).filter((p): p is [number, number] => {
+        if (!p || seen.has(`${p[0].toFixed(4)},${p[1].toFixed(4)}`)) return false;
+        seen.add(`${p[0].toFixed(4)},${p[1].toFixed(4)}`);
+        return true;
+      });
+      if (pts.length === 0) return;
       setLayer('live');
       el.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-      m.flyTo({ center: at, zoom: Math.min(m.getMaxZoom(), Math.max(m.getZoom(), 10)), duration: 900 });
-      (m.getSource('focus') as GeoJSONSource | undefined)?.setData({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: at } });
+      if (pts.length === 1) {
+        m.flyTo({ center: pts[0], zoom: Math.min(m.getMaxZoom(), Math.max(m.getZoom(), 10)), duration: 900 }, { focus: true });
+      } else {
+        const lons = pts.map((p) => p[0]);
+        const lats = pts.map((p) => p[1]);
+        m.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]], { padding: 56, maxZoom: Math.min(m.getMaxZoom(), 12), duration: 900 }, { focus: true });
+      }
+      (m.getSource('focus') as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: pts.map((p) => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: p } })) });
       focusUntil.current = Date.now() + 8000;
     });
+    return () => {
+      off();
+      setLocator(null);
+    };
   }, [ready]);
+
+  // New positions or trails: cards re-check whether their pin has anywhere to go.
+  useEffect(() => {
+    if (ready) positionsChanged();
+  }, [ready, snapshot, tracks]);
 
   // Feed filtered to some types: dim the map layers of the other families (the trails and sites per feature).
   useEffect(() => {
@@ -828,13 +864,44 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
     if (!ready || !m) return;
     if (layer === 'weather' && prevLayer.current !== 'weather' && radar) {
       const [w, s, e, n] = radar.bounds;
-      m.fitBounds([[w, s], [e, n]], { padding: 24, duration: 600 });
+      m.fitBounds([[w, s], [e, n]], { padding: 24, duration: 600 }, HOME_MOVE);
     } else if (layer !== 'weather' && prevLayer.current === 'weather') {
-      m.easeTo({ center: [-77.03, 38.9], zoom: 8.6, duration: 600 });
+      m.easeTo({ ...homeView(), duration: 600 }, HOME_MOVE);
     }
     prevLayer.current = layer;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, layer]);
+
+  // Starting view: the receiver's area, or on the Weather tab the radar's coverage.
+  const homeView = () => ({ center: (snapRef.current?.home ? [snapRef.current.home.lon, snapRef.current.home.lat] : [-77.03, 38.9]) as [number, number], zoom: 8.6 });
+  const recenter = () => {
+    const m = map.current;
+    if (!m) return;
+    if (layer === 'weather' && radar) {
+      const [w, s, e, n] = radar.bounds;
+      m.fitBounds([[w, s], [e, n]], { padding: 24, duration: 600 }, HOME_MOVE);
+    } else m.easeTo({ ...homeView(), duration: 600 }, HOME_MOVE);
+  };
+  useEffect(() => {
+    const m = map.current;
+    if (!ready || !m) return;
+    // Off the starting view: the viewer dragging, pinching or scrolling (an originalEvent), or a feed card's flyTo.
+    // Resizes and our own returns home (HOME_MOVE) move the camera too, but don't count.
+    const isHome = (e: object) => (e as { home?: boolean }).home === true;
+    const start = (e: object) => {
+      const ev = e as { originalEvent?: unknown; focus?: boolean };
+      if (ev.originalEvent || ev.focus) setOffHome(true);
+    };
+    const end = (e: object) => {
+      if (isHome(e)) setOffHome(false);
+    };
+    m.on('movestart', start);
+    m.on('moveend', end);
+    return () => {
+      m.off('movestart', start);
+      m.off('moveend', end);
+    };
+  }, [ready]);
 
   const now = snapshot?.now ?? Date.now();
   const adsb = snapshot?.sources.find((s) => s.id === 'adsb');
@@ -857,15 +924,23 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
           </button>
         ))}
       </div>
+      {layer !== 'traffic' && ((layer === 'live' && adsb?.error) || offHome) && (
+        <div className="overlay-tr">
+          {layer === 'live' && adsb?.error && (
+            <span className="tog" style={{ color: 'var(--wx)' }}>
+              Receiver unreachable{adsb.lastHeard ? ` · last heard ${ago(adsb.lastHeard, now)}` : ''}
+            </span>
+          )}
+          {offHome && (
+            <button type="button" className="tog recenter" onClick={recenter} title={layer === 'weather' ? 'Back to the radar area' : 'Back to the starting view'}>
+              <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="4" fill="none" stroke="currentColor" strokeWidth="1.4" /><circle cx="7" cy="7" r="1.4" fill="currentColor" /><path d="M7 .8v2.2M7 11v2.2M.8 7h2.2M11 7h2.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+              Re-center
+            </button>
+          )}
+        </div>
+      )}
       {layer === 'live' && (
         <>
-          {adsb?.error && (
-            <div className="overlay-tr">
-              <span className="tog" style={{ color: 'var(--wx)' }}>
-                Receiver unreachable{adsb.lastHeard ? ` · last heard ${ago(adsb.lastHeard, now)}` : ''}
-              </span>
-            </div>
-          )}
           <div className="overlay-b">
             <div className="tog" style={{ gap: 16 }}>
               <span><b className="mono">{snapshot ? snapshot.aircraft.length : '—'}</b> <span className="muted">aircraft</span></span>

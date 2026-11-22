@@ -3,6 +3,7 @@ import type { FeedItem } from '../../../shared/types.ts';
 import { FAMILY_COLOR } from '../bands.ts';
 import { ClipPlayer } from './ClipPlayer.tsx';
 import { WhenRange } from './When.tsx';
+import { LocateButton, focusOf } from './Locate.tsx';
 
 // Runs of the same kind fold into one collapsed card: by default one card per slot visit (items close together),
 // and per hour or so for kinds that report once a loop. `gap` = the most time between neighbouring items;
@@ -91,6 +92,7 @@ export function BundleCard({ items, renderItem }: { items: FeedItem[]; renderIte
   const oldest = items[items.length - 1].ts;
   const cur = playable[Math.min(idx, playable.length - 1)];
   const sec = first.kind === 'ATC' || first.kind === 'Rail radio';
+  const targets = items.map(focusOf).filter((f) => f !== undefined);
 
   return (
     <article className="card catch">
@@ -105,6 +107,7 @@ export function BundleCard({ items, renderItem }: { items: FeedItem[]; renderIte
           <span className="mono muted" style={{ fontSize: 11, marginLeft: 'auto' }}>
             <WhenRange from={oldest} to={newest} sec={sec} />
           </span>
+          {targets.length > 0 && <LocateButton targets={targets} label={`Show these ${items.length} ${rule.noun[1]} on the map`} />}
         </div>
         {titles.size > 1 || first.kind === 'ATC' || first.kind === 'Rail radio' ? (
           <div className="catch-body">{whoLine(items)}</div>
