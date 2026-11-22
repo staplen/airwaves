@@ -26,3 +26,21 @@ export function approxHome(home: Home, off: Offset): Home {
   const outLon = lon + off.eastKm / (KM_PER_DEG_LAT * Math.cos((lat * Math.PI) / 180));
   return { lat: Number(outLat.toFixed(3)), lon: Number(outLon.toFixed(3)), approx: true };
 }
+
+const km = (a: { lat: number; lon: number }, b: { lat: number; lon: number }) =>
+  Math.hypot((a.lat - b.lat) * KM_PER_DEG_LAT, (a.lon - b.lon) * KM_PER_DEG_LAT * Math.cos((a.lat * Math.PI) / 180));
+export const DISPLAY_MIN_KM = 1;
+export const DISPLAY_MAX_KM = 10;
+
+/**
+ * A public stand-in you choose (PUBLIC_HOME_LAT/LON, e.g. a nearby landmark or major intersection) instead of the
+ * snapped-and-shifted point. Too close to the real location (it would give it away) or too far (the range rings
+ * would mislead) and it's refused with the reason, so the caller can fall back to approxHome.
+ */
+export function displayHome(home: Home, lat: number, lon: number): Home | { refused: string } {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return { refused: 'not a number' };
+  const d = km(home, { lat, lon });
+  if (d < DISPLAY_MIN_KM) return { refused: `only ${d.toFixed(1)} km from the real location (needs ${DISPLAY_MIN_KM}+)` };
+  if (d > DISPLAY_MAX_KM) return { refused: `${d.toFixed(1)} km from the real location (keep it within ${DISPLAY_MAX_KM})` };
+  return { lat: Number(lat.toFixed(4)), lon: Number(lon.toFixed(4)), approx: true };
+}

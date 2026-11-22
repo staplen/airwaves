@@ -4,7 +4,7 @@ import { createReadStream, existsSync, mkdirSync, readdirSync, statSync } from '
 import { copyFile, mkdir, readdir, readFile, unlink } from 'node:fs/promises';
 import { dirname, extname, join, normalize } from 'node:path';
 import { connect as mqttConnect } from 'mqtt';
-import type { Aircraft, AisFixed, Balloon, FeedItem, Overlays, Pin, PinMetric, RadioStation, SchedulerState, SensorInfo, SlotStat, Snapshot, SourceStatus, SpectrumHeat, Tracks, Vessel } from '../../shared/types.ts';
+import type { Aircraft, AisFixed, Balloon, FeedItem, Home, Overlays, Pin, PinMetric, RadioStation, SchedulerState, SensorInfo, SlotStat, Snapshot, SourceStatus, SpectrumHeat, Tracks, Vessel } from '../../shared/types.ts';
 import { AdsbSource } from './adsb.ts';
 import { AisDecoder, shipTypeName } from './ais.ts';
 import { ClipWatcher, existingClips, type Clip } from './clips.ts';
@@ -22,7 +22,7 @@ import { addProbe, ingestSurvey, surveyReport, type SurveyState } from './survey
 import { ingestProbes } from './probe.ts';
 import type { AprsPacket } from './aprs.ts';
 import { describeAprs, weatherLine } from './aprstext.ts';
-import { approxHome, randomOffset, type Offset } from './privacy.ts';
+import { approxHome, displayHome, randomOffset, type Offset } from './privacy.ts';
 import { readOverlays } from './overlays.ts';
 import { Publisher } from './publisher.ts';
 import { describeBalloon, SondeTracker } from './sonde.ts';
@@ -322,9 +322,23 @@ function slotStats(now: number, aircraft: Aircraft[]): Record<string, SlotStat> 
 
 // ---- public view: approximate home location, no distances -----------------------------------
 let publicOffset: Offset | undefined; // set in loadState
+// A stand-in you picked (PUBLIC_HOME_LAT/LON) wins over the snapped-and-shifted point, once checked against the real one.
+let publicDisplay: { key: string; home?: Home } | undefined;
+function publicHome(home: Home): Home | undefined {
+  if (env.PUBLIC_HOME_LAT && env.PUBLIC_HOME_LON) {
+    const key = `${home.lat},${home.lon}`;
+    if (publicDisplay?.key !== key) {
+      const d = displayHome(home, Number(env.PUBLIC_HOME_LAT), Number(env.PUBLIC_HOME_LON));
+      if ('refused' in d) console.warn(`PUBLIC_HOME_LAT/LON ignored: ${d.refused}; using the snapped-and-shifted point`);
+      publicDisplay = { key, home: 'refused' in d ? undefined : d };
+    }
+    if (publicDisplay.home) return publicDisplay.home;
+  }
+  return publicOffset ? approxHome(home, publicOffset) : undefined;
+}
 const DISTANCE_TEXT = /,?\s*(?:at\s+)?[\d.]+\s*nm\b/g;
 function publicSnapshot(s: Snapshot): Snapshot {
-  return { ...s, sensors: undefined, pinned: s.pinned?.map((p) => ({ ...p, key: '' })), home: s.home && publicOffset ? approxHome(s.home, publicOffset) : undefined, };
+  return { ...s, sensors: undefined, pinned: s.pinned?.map((p) => ({ ...p, key: '' })), home: s.home ? publicHome(s.home) : undefined, };
 }
 // Older aircraft summaries said how far planes were from the receiver; strip that from the stored feed too.
 {

@@ -5,7 +5,7 @@ export type Family = 'air' | 'sea' | 'wx' | 'home' | 'bcast' | 'rail' | 'ham';
 export interface Home {
   lat: number;
   lon: number;
-  approx?: boolean; // public site: snapped and shifted a few km; draw as a soft area, not a pin
+  approx?: boolean; // public site: a stand-in a few km off (chosen landmark, or snapped and shifted); not the exact spot
 }
 
 export interface Aircraft {

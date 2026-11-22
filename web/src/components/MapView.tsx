@@ -17,7 +17,6 @@ const STYLE = 'https://tiles.openfreemap.org/styles/dark';
 // Absolute, because the build uses a relative base and the worker must resolve against the page.
 setWorkerUrl(new URL(workerUrl, document.baseURI).href);
 const RINGS_NM = [10, 20, 30];
-const AREA_M = 4000; // radius of the soft 'listening area' on the public site
 const PUBLIC_MAX_ZOOM = 10;
 const STALE_S = 30;
 
@@ -83,6 +82,33 @@ function shipImage(): ImageData {
 type NavIcon = 'nav-port' | 'nav-stbd' | 'nav-light' | 'nav-other' | 'nav-station';
 
 /** Chart-style symbols: green can (port hand), red nun (starboard hand), magenta light flare, yellow diamond, shore station mast. */
+/** The receiver: a yagi on a mast with a foot, green over a dark outline, drawn at 2x for a crisp 18 px icon. */
+function receiverImage(): ImageData {
+  const k = 2;
+  const c = document.createElement('canvas');
+  c.width = c.height = 24 * k;
+  const g = c.getContext('2d')!;
+  g.scale(k, k);
+  g.lineCap = 'round';
+  g.lineJoin = 'round';
+  const path = () => {
+    g.beginPath();
+    for (const [x1, y1, x2, y2] of [[8, 9, 8, 21], [4, 9, 20, 9], [11.5, 5, 11.5, 13], [15.5, 6, 15.5, 12], [19.5, 7, 19.5, 11], [5, 21, 11, 21]]) {
+      g.moveTo(x1, y1);
+      g.lineTo(x2, y2);
+    }
+  };
+  path();
+  g.strokeStyle = '#0b0e13';
+  g.lineWidth = 4.5;
+  g.stroke();
+  path();
+  g.strokeStyle = '#4ade80';
+  g.lineWidth = 2;
+  g.stroke();
+  return g.getImageData(0, 0, c.width, c.height);
+}
+
 function navImage(kind: NavIcon): ImageData {
   const s = 24;
   const c = document.createElement('canvas');
@@ -442,7 +468,7 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
     };
     // Touch screens never send mouseleave: a tap on empty map closes the card.
     m.on('click', (e) => {
-      const layers = ['aids', 'sites', 'aircraft', 'aprs', 'uat-gs', 'balloons', 'trails-hit'].filter((l) => m.getLayer(l));
+      const layers = ['home', 'aids', 'sites', 'aircraft', 'aprs', 'uat-gs', 'balloons', 'trails-hit'].filter((l) => m.getLayer(l));
       if (!m.queryRenderedFeatures(e.point, { layers }).length) {
         hover.remove();
         shown = undefined;
@@ -510,8 +536,16 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
       });
       m.addLayer({ id: 'rings', type: 'line', source: 'rings', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#3a4659', 'line-width': 1, 'line-dasharray': [2, 3] } });
       m.addLayer({ id: 'ring-labels', type: 'symbol', source: 'rings', filter: ['has', 'label'], layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 10, 'text-offset': [0, -0.8] }, paint: { 'text-color': '#8b93a1' } });
-      m.addLayer({ id: 'home-halo', type: 'circle', source: 'rings', filter: ['has', 'home'], paint: { 'circle-radius': 14, 'circle-color': '#4ade80', 'circle-opacity': 0.15, 'circle-radius-transition': { duration: 0 }, 'circle-opacity-transition': { duration: 0 } } });
-      m.addLayer({ id: 'home', type: 'circle', source: 'rings', filter: ['has', 'home'], paint: { 'circle-radius': 5, 'circle-color': '#4ade80', 'circle-opacity-transition': { duration: 0 } } });
+      // The receiver: a static antenna icon (its foot on the point), labelled once zoomed in like the transmitter sites.
+      m.addImage('receiver', receiverImage(), { pixelRatio: 2 });
+      m.addLayer({
+        id: 'home',
+        type: 'symbol',
+        source: 'rings',
+        filter: ['has', 'home'],
+        layout: { 'icon-image': 'receiver', 'icon-size': 0.75, 'icon-anchor': 'bottom', 'icon-allow-overlap': true, 'text-field': ['step', ['zoom'], '', 9, 'Receiver'], 'text-font': ['Noto Sans Regular'], 'text-size': 10, 'text-offset': [0, 0.3], 'text-anchor': 'top', 'text-optional': true },
+        paint: { 'text-color': '#4ade80', 'text-halo-color': '#0b0e13', 'text-halo-width': 1.2 },
+      });
       (['nav-port', 'nav-stbd', 'nav-light', 'nav-other', 'nav-station'] as const).forEach((k) => m.addImage(k, navImage(k), { pixelRatio: 1.5 }));
       m.addLayer({ id: 'aids', type: 'symbol', source: 'sea', filter: ['!=', ['get', 'kind'], 'ship'], layout: { 'icon-image': ['get', 'icon'], 'icon-allow-overlap': true } });
       // Click a marker for a small card: what it is, which side of the channel, and where the data came from.
@@ -570,6 +604,12 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
         const f = e.features?.[0];
         if (!f || f.geometry.type !== 'Point') return undefined;
         return { at: f.geometry.coordinates as [number, number], card: aircraftCard(JSON.parse(String(f.properties?.info)) as Aircraft) };
+      });
+      hoverCard('home', '240px', (e) => {
+        const f = e.features?.[0];
+        if (!f || f.geometry.type !== 'Point') return undefined;
+        const near = approx.current;
+        return { at: f.geometry.coordinates as [number, number], card: card([['Receiver'], [near ? 'The antenna is near here, not at this exact spot.' : 'Where the antenna is.', 'muted']]) };
       });
       hoverCard('sites', '260px', (e) => {
         const f = e.features?.[0];
@@ -643,13 +683,6 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
               m.setPaintProperty('focus-ring', 'circle-stroke-opacity', Math.min(1, left / 1500) * (1 - k * 0.6));
             }
           }
-          const p = (t % 2400) / 2400;
-          if (approx.current) {
-            if (m.getLayer('home')) m.setPaintProperty('home', 'circle-opacity', 0.22 + 0.13 * Math.sin(p * 2 * Math.PI));
-          } else if (m.getLayer('home-halo')) {
-            m.setPaintProperty('home-halo', 'circle-radius', 6 + 16 * p);
-            m.setPaintProperty('home-halo', 'circle-opacity', 0.35 * (1 - p));
-          }
           if (m.getLayer('site-pulse')) {
             const q = (t % 1800) / 1800;
             m.setPaintProperty('site-pulse', 'circle-radius', 5 + 13 * q);
@@ -679,13 +712,9 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
     if (snapshot.home) {
       (m.getSource('rings') as GeoJSONSource).setData(ringsFC(snapshot.home));
       if (snapshot.home.approx && !approx.current) {
-        // Public site: the location is only approximate, so draw a soft ~4 km area instead of a pin,
-        // and stop zooming in before streets would make the dot look precise.
+        // Public site: the point is a stand-in a few km off (a chosen landmark, or snapped and shifted), so say so
+        // and stop zooming in before streets would make it look exact.
         approx.current = true;
-        const r0 = AREA_M / (156543.03 * Math.cos((snapshot.home.lat * Math.PI) / 180)); // pixels at zoom 0
-        m.setPaintProperty('home', 'circle-radius', ['interpolate', ['exponential', 2], ['zoom'], 0, r0, 20, r0 * 2 ** 20]);
-        m.setPaintProperty('home', 'circle-blur', 0.9);
-        m.setLayoutProperty('home-halo', 'visibility', 'none');
         m.setMaxZoom(PUBLIC_MAX_ZOOM);
       }
       if (!centered.current) {
