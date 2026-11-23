@@ -54,7 +54,7 @@ export function App() {
     <div className="page">
       <h1 className="sr-only">Airwaves</h1>
       <div className="stage">
-        <MapView snapshot={snapshot} />
+        <MapView snapshot={snapshot} feed={feed} />
         <div className="feedfloat">
           <Feed items={feed} />
         </div>

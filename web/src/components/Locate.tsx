@@ -3,7 +3,7 @@ import { focusOnMap, useLocatable, type Focus } from '../mapEvents.ts';
 
 /** What a feed item can point at on the map, or nothing if it carries no place at all. */
 export function focusOf(i: FeedItem): Focus | undefined {
-  return i.ref || (i.lat !== undefined && i.lon !== undefined) ? { ref: i.ref, lat: i.lat, lon: i.lon, label: i.title } : undefined;
+  return i.ref || (i.lat !== undefined && i.lon !== undefined) ? { ref: i.ref, lat: i.lat, lon: i.lon, approxKm: i.approxKm, label: i.title } : undefined;
 }
 
 /** Map pin for a card: hidden when none of its targets can be found (an aircraft long gone with no position heard). */

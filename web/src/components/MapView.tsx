@@ -4,7 +4,7 @@ import { Map as MlMap, Popup, setWorkerUrl, type GeoJSONSource, type MapLayerMou
 // Let Vite bundle the worker (with its shared chunk) and hand MapLibre the URL.
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { Aircraft, AisFixed, AprsStation, Balloon, Home, Overlays, Snapshot, Tracks, UatStation, Vessel } from '../../../shared/types.ts';
+import type { Aircraft, AisFixed, AprsStation, Balloon, FeedItem, Home, Overlays, Snapshot, Tracks, UatStation, Vessel } from '../../../shared/types.ts';
 import { apiUrl, isStatic } from '../api.ts';
 import { ago } from '../live.ts';
 import { sitesFC } from '../sites.ts';
@@ -350,6 +350,75 @@ function uatStationsFC(list: UatStation[]): FC {
   return { type: 'FeatureCollection', features: list.map((st) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [st.lon, st.lat] }, properties: { id: `uatgs:${st.lat},${st.lon}`, info: JSON.stringify(st) } })) };
 }
 
+// Datalink handoffs give only a rough position: drawn as a shaded "somewhere in here" area with a hollow, dashed plane
+// in the middle. It fades over APPROX_MAX_MS and is dropped as soon as ADS-B has a live position for the same airframe.
+const APPROX_MAX_MS = 20 * 60_000;
+const APPROX_COLOR = '#5ab0ff';
+
+/** A ring of `km` around a point, as a closed polygon ring. */
+function circleRing(lon: number, lat: number, km: number): [number, number][] {
+  const dLat = km / 111.32;
+  const dLon = dLat / Math.cos((lat * Math.PI) / 180);
+  const out: [number, number][] = [];
+  for (let i = 0; i <= 64; i++) {
+    const t = (i / 64) * 2 * Math.PI;
+    out.push([lon + dLon * Math.sin(t), lat + dLat * Math.cos(t)]);
+  }
+  return out;
+}
+
+function approxFC(feed: FeedItem[], aircraft: Aircraft[], nowMs: number): FC {
+  const live = new Set(aircraft.filter((a) => a.lat !== undefined && a.lon !== undefined && a.seen <= STALE_S).map((a) => `air:${a.hex}`));
+  const done = new Set<string>();
+  const features: GeoJSON.Feature[] = [];
+  for (const i of [...feed].sort((a, b) => b.ts - a.ts)) {
+    if (!i.approxKm || i.lat === undefined || i.lon === undefined) continue;
+    const age = Math.max(0, nowMs - i.ts);
+    if (age > APPROX_MAX_MS) continue;
+    const name = i.title.split(' · ')[0];
+    const key = i.ref ?? name;
+    if (done.has(key)) continue; // newest report per airframe only
+    done.add(key);
+    if (i.ref && live.has(i.ref)) continue;
+    const op = 1 - 0.7 * (age / APPROX_MAX_MS);
+    features.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [circleRing(i.lon, i.lat, i.approxKm)] }, properties: { op } });
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [i.lon, i.lat] },
+      properties: { id: key, op, label: name, sub: [i.altFt ? `~${fmtFt(i.altFt)}` : undefined, ago(i.ts, nowMs)].filter(Boolean).join(' · '), info: JSON.stringify(i) },
+    });
+  }
+  return { type: 'FeatureCollection', features };
+}
+
+function approxCard(i: FeedItem): HTMLElement {
+  return card([
+    [i.title.split(' · ')[0]],
+    [`Rough position from a datalink handoff: somewhere within about ${i.approxKm} km of here. Not on ADS-B right now.`],
+    [[i.altFt ? `~${fmtFt(i.altFt)}` : undefined, `heard ${fmtTime(i.ts)}`, `${i.meta} MHz`].filter(Boolean).join(' · '), 'muted'],
+  ]);
+}
+
+/** The plane outline, hollow and dashed, for an aircraft we only roughly know the position of (no heading: points north). */
+function ghostPlaneImage(): ImageData {
+  const s = 32;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d')!;
+  g.translate(s / 2, s / 2);
+  g.scale(1.6, 1.6);
+  g.strokeStyle = APPROX_COLOR;
+  g.lineWidth = 1;
+  g.lineJoin = 'round';
+  g.setLineDash([1.6, 1.2]);
+  g.beginPath();
+  const p = [[0, -8], [2, -2], [9, 1], [9, 3], [2, 1.5], [1.5, 6], [4, 8], [4, 9], [0, 8], [-4, 9], [-4, 8], [-1.5, 6], [-2, 1.5], [-9, 3], [-9, 1], [-2, -2]];
+  p.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
+  g.closePath();
+  g.stroke();
+  return g.getImageData(0, 0, s, s);
+}
+
 const fmtTime = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 const fmtFt = (ft: number) => (ft >= 18000 ? `FL${Math.round(ft / 100)}` : `${Math.round(ft / 100) * 100} ft`);
 
@@ -399,7 +468,7 @@ const PULSE_FRAME_MS = 1000 / 30;
 /** Event data on our own moves back to the starting view, so they clear the re-center button. */
 const HOME_MOVE = { home: true };
 
-export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot }) {
+export const MapView = memo(function MapView({ snapshot, feed }: { snapshot?: Snapshot; feed: FeedItem[] }) {
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<MlMap>(null);
   const [ready, setReady] = useState(false);
@@ -457,7 +526,7 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
     };
     // Touch screens never send mouseleave: a tap on empty map closes the card.
     m.on('click', (e) => {
-      const layers = ['home', 'aids', 'sites', 'aircraft', 'aprs', 'uat-gs', 'balloons', 'trails-hit'].filter((l) => m.getLayer(l));
+      const layers = ['home', 'aids', 'sites', 'aircraft', 'approx-plane', 'aprs', 'uat-gs', 'balloons', 'trails-hit'].filter((l) => m.getLayer(l));
       if (!m.queryRenderedFeatures(e.point, { layers }).length) {
         hover.remove();
         shown = undefined;
@@ -467,6 +536,7 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
       m.addImage('plane', planeImage(), { sdf: true });
       m.addImage('heli', heliImage(), { sdf: true });
       m.addImage('ship', shipImage(), { sdf: true });
+      m.addImage('plane-ghost', ghostPlaneImage());
       m.addSource('sea', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       m.addSource('rings', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       m.addSource('aircraft', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
@@ -651,6 +721,26 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
           'text-halo-width': 1.2,
         },
       });
+      // Aircraft we only roughly know the position of (datalink handoffs), under the live ones.
+      m.addSource('approx', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      m.addLayer({ id: 'approx-area', type: 'fill', source: 'approx', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': APPROX_COLOR, 'fill-opacity': ['*', 0.09, ['get', 'op']] } }, 'aircraft');
+      m.addLayer({ id: 'approx-edge', type: 'line', source: 'approx', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'line-color': APPROX_COLOR, 'line-width': 1, 'line-dasharray': [2, 3], 'line-opacity': ['*', 0.45, ['get', 'op']] } }, 'aircraft');
+      m.addLayer(
+        {
+          id: 'approx-plane',
+          type: 'symbol',
+          source: 'approx',
+          filter: ['==', ['geometry-type'], 'Point'],
+          layout: { 'icon-image': 'plane-ghost', 'icon-size': 0.8, 'icon-allow-overlap': true, 'text-field': ['format', ['get', 'label'], {}, '\n', {}, ['get', 'sub'], { 'font-scale': 0.85 }], 'text-font': ['Noto Sans Regular'], 'text-size': 11, 'text-anchor': 'left', 'text-offset': [1.3, 0], 'text-justify': 'left', 'text-optional': true },
+          paint: { 'icon-opacity': ['get', 'op'], 'text-color': APPROX_COLOR, 'text-opacity': ['get', 'op'], 'text-halo-color': '#0b0e13', 'text-halo-width': 1.2 },
+        },
+        'aircraft',
+      );
+      hoverCard('approx-plane', '260px', (e) => {
+        const f = e.features?.[0];
+        if (!f || f.geometry.type !== 'Point') return undefined;
+        return { at: f.geometry.coordinates as [number, number], card: approxCard(JSON.parse(String(f.properties?.info)) as FeedItem) };
+      });
       // Highlight ring for "show on the map" from a feed card (animated in the pulse loop below).
       m.addSource('focus', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       m.addLayer({ id: 'focus-ring', type: 'circle', source: 'focus', paint: { 'circle-radius': 14, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': '#e6e9ee', 'circle-stroke-width': 2, 'circle-stroke-opacity': 0.9 } });
@@ -742,6 +832,16 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
     };
   }, []);
 
+  // Rough datalink positions: redrawn as the feed and live aircraft change, and every 30 s so they keep fading.
+  useEffect(() => {
+    const m = map.current;
+    if (!ready || !m) return;
+    const draw = () => (m.getSource('approx') as GeoJSONSource | undefined)?.setData(approxFC(feed, snapRef.current?.aircraft ?? [], Date.now()));
+    draw();
+    const t = setInterval(draw, 30_000);
+    return () => clearInterval(t);
+  }, [ready, snapshot, feed]);
+
   // Redraw contrails when new tracks arrive, and every minute so they keep fading.
   useEffect(() => {
     const m = map.current;
@@ -758,7 +858,7 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
     const m = map.current;
     if (!ready || !m) return;
     // Where a card's target is: the live object, else where the card says it happened, else the end of its trail.
-    const find = (f: Focus): [number, number] | undefined => {
+    const where = (f: Focus): { at: [number, number]; roughKm?: number } | undefined => {
       const snap = snapRef.current;
       const [kind, key] = (f.ref ?? '').split(/:(.*)/s);
       let at: [number, number] | undefined;
@@ -778,29 +878,36 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
         const st = SITES.find((x) => x.id === key);
         if (st) at = [st.lon, st.lat];
       }
-      at ??= f.lat !== undefined && f.lon !== undefined ? [f.lon, f.lat] : undefined;
-      if (!at && f.ref) {
+      if (at) return { at };
+      // Where the card says: for a rough position (datalink handoff), the area it could be in.
+      if (f.lat !== undefined && f.lon !== undefined) return { at: [f.lon, f.lat], roughKm: f.approxKm };
+      if (f.ref) {
         const last = tracksRef.current?.tracks.find((t) => t.id === f.ref)?.pts.at(-1);
-        if (last) at = [last[0], last[1]];
+        if (last) return { at: [last[0], last[1]] };
       }
-      return at;
+      return undefined;
     };
+    const find = (f: Focus) => where(f)?.at;
     setLocator(find);
     const off = onMapFocus((fs) => {
       const seen = new Set<string>();
-      const pts = fs.map(find).filter((p): p is [number, number] => {
-        if (!p || seen.has(`${p[0].toFixed(4)},${p[1].toFixed(4)}`)) return false;
-        seen.add(`${p[0].toFixed(4)},${p[1].toFixed(4)}`);
+      const hits = fs.map(where).filter((h): h is NonNullable<typeof h> => {
+        const k = h && `${h.at[0].toFixed(4)},${h.at[1].toFixed(4)}`;
+        if (!k || seen.has(k)) return false;
+        seen.add(k);
         return true;
       });
+      const pts = hits.map((h) => h.at);
       if (pts.length === 0) return;
       setLayer('live');
       el.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-      if (pts.length === 1) {
+      if (pts.length === 1 && !hits[0].roughKm) {
         m.flyTo({ center: pts[0], zoom: Math.min(m.getMaxZoom(), Math.max(m.getZoom(), 10)), duration: 900 }, { focus: true });
       } else {
-        const lons = pts.map((p) => p[0]);
-        const lats = pts.map((p) => p[1]);
+        // Fit every place, and the whole of any rough area (not zoomed in on a centre that's only a guess).
+        const corners = hits.flatMap((h) => (h.roughKm ? circleRing(h.at[0], h.at[1], h.roughKm) : [h.at]));
+        const lons = corners.map((p) => p[0]);
+        const lats = corners.map((p) => p[1]);
         m.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]], { padding: 56, maxZoom: Math.min(m.getMaxZoom(), 12), duration: 900 }, { focus: true });
       }
       (m.getSource('focus') as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: pts.map((p) => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: p } })) });
@@ -821,14 +928,14 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
   useEffect(() => {
     const m = map.current;
     if (!ready || !m) return;
-    const LAYER_FAMILY: Record<string, string> = { aircraft: 'air', 'uat-gs': 'air', ships: 'sea', aids: 'sea', 'aid-labels': 'sea', balloons: 'wx', 'balloon-tracks': 'wx', 'balloon-labels': 'wx', aprs: 'ham', 'aprs-labels': 'ham' };
+    const LAYER_FAMILY: Record<string, string> = { aircraft: 'air', 'approx-area': 'air', 'approx-edge': 'air', 'approx-plane': 'air', 'uat-gs': 'air', ships: 'sea', aids: 'sea', 'aid-labels': 'sea', balloons: 'wx', 'balloon-tracks': 'wx', 'balloon-labels': 'wx', aprs: 'ham', 'aprs-labels': 'ham' };
     const PER_FEATURE: Record<string, unknown> = {
       'trails-line': ['match', ['get', 'kind'], 'sea', 'sea', 'ham', 'ham', 'air'],
       'trails-dot': ['match', ['get', 'kind'], 'sea', 'sea', 'ham', 'ham', 'air'],
       sites: ['match', ['get', 'kind'], 'atc', 'air', 'fm', 'bcast', 'nws', 'wx', 'ais', 'sea', 'bcast'],
       'site-labels': ['match', ['get', 'kind'], 'atc', 'air', 'fm', 'bcast', 'nws', 'wx', 'ais', 'sea', 'bcast'],
     };
-    const PROPS: Record<string, string[]> = { circle: ['circle-opacity', 'circle-stroke-opacity'], symbol: ['icon-opacity', 'text-opacity'], line: ['line-opacity'] };
+    const PROPS: Record<string, string[]> = { fill: ['fill-opacity'], circle: ['circle-opacity', 'circle-stroke-opacity'], symbol: ['icon-opacity', 'text-opacity'], line: ['line-opacity'] };
     const DIM = 0.12;
     const original = new Map<string, unknown>();
     return onMapFilter((fams) => {

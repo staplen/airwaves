@@ -63,12 +63,14 @@ export class Store {
     if (!cols.includes('lat')) this.db.exec('ALTER TABLE feed ADD COLUMN lat REAL');
     if (!cols.includes('lon')) this.db.exec('ALTER TABLE feed ADD COLUMN lon REAL');
     if (!cols.includes('ref')) this.db.exec('ALTER TABLE feed ADD COLUMN ref TEXT');
+    if (!cols.includes('approx_km')) this.db.exec('ALTER TABLE feed ADD COLUMN approx_km REAL');
+    if (!cols.includes('alt_ft')) this.db.exec('ALTER TABLE feed ADD COLUMN alt_ft INTEGER');
   }
 
   addFeed(item: Omit<FeedItem, 'id'>): FeedItem {
     const r = this.db
-      .prepare('INSERT INTO feed (ts, family, kind, title, meta, body, mono, clip, raw, image, tag, peaks, lat, lon, ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(item.ts, item.family, item.kind, item.title, item.meta, item.body, item.mono ? 1 : 0, item.clip ?? null, item.raw ?? null, item.image ?? null, item.tag ?? null, item.peaks ?? null, item.lat ?? null, item.lon ?? null, item.ref ?? null);
+      .prepare('INSERT INTO feed (ts, family, kind, title, meta, body, mono, clip, raw, image, tag, peaks, lat, lon, ref, approx_km, alt_ft) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(item.ts, item.family, item.kind, item.title, item.meta, item.body, item.mono ? 1 : 0, item.clip ?? null, item.raw ?? null, item.image ?? null, item.tag ?? null, item.peaks ?? null, item.lat ?? null, item.lon ?? null, item.ref ?? null, item.approxKm ?? null, item.altFt ?? null);
     return { ...item, id: Number(r.lastInsertRowid) };
   }
 
@@ -270,5 +272,7 @@ function toItem(r: Record<string, unknown>): FeedItem {
     lat: typeof r.lat === 'number' ? r.lat : undefined,
     lon: typeof r.lon === 'number' ? r.lon : undefined,
     ref: typeof r.ref === 'string' ? r.ref : undefined,
+    approxKm: typeof r.approx_km === 'number' ? r.approx_km : undefined,
+    altFt: typeof r.alt_ft === 'number' ? r.alt_ft : undefined,
   };
 }

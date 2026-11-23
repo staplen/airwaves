@@ -20,3 +20,19 @@ test('feed window keeps the newest N of each kind', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('feed keeps a rough position and its altitude', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'store-'));
+  try {
+    const store = new Store(path.join(dir, 'a.db'));
+    store.addFeed({ ts: 1000, family: 'air', kind: 'Datalink', title: 'Aircraft A92361 · handed off', meta: '136.650', body: '', lat: 38.5, lon: -76, approxKm: 25, altFt: 37000, ref: 'air:a92361' });
+    store.addFeed({ ts: 2000, family: 'air', kind: 'Datalink', title: 'American 724 · controller text', meta: '136.800', body: '' });
+    const [plain, rough] = store.recentFeed(10);
+    assert.equal(rough.approxKm, 25);
+    assert.equal(rough.altFt, 37000);
+    assert.equal(plain.approxKm, undefined);
+    assert.equal(plain.altFt, undefined);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

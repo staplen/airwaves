@@ -548,6 +548,9 @@ function onVdl2Frame(raw: string) {
   const c = parseVdl2(raw);
   if (c) onDatalink(c);
 }
+// How far off a VDL2 handoff's position can be. The comment in vdl2.ts says "nearest ~half degree"; not yet checked
+// against ADS-B for the same airframes, so this is a cautious guess (half a half-degree cell's diagonal, rounded up).
+const COARSE_KM = 25;
 /** One translated datalink message, from VDL2 or plain VHF ACARS: names, trails, sightings, feed. */
 function onDatalink(c: NonNullable<ReturnType<typeof parseVdl2>>) {
   const key = c.flight ?? c.reg ?? c.title;
@@ -561,7 +564,7 @@ function onDatalink(c: NonNullable<ReturnType<typeof parseVdl2>>) {
   const last = lastVdl2PerFlight.get(key) ?? 0;
   if (!c.title.includes('controller') && c.ts - last < 5 * 60_000) return;
   lastVdl2PerFlight.set(key, c.ts);
-  publishFeed({ ts: c.ts, family: 'air', kind: 'Datalink', title: c.title, meta: `${c.freqMhz.toFixed(3)}`, body: c.body, raw: c.raw, lat: c.lat, lon: c.lon, ref: c.hex ? `air:${c.hex}` : undefined });
+  publishFeed({ ts: c.ts, family: 'air', kind: 'Datalink', title: c.title, meta: `${c.freqMhz.toFixed(3)}`, body: c.body, raw: c.raw, lat: c.lat, lon: c.lon, approxKm: c.coarse && c.lat !== undefined ? COARSE_KM : undefined, altFt: c.altFt, ref: c.hex ? `air:${c.hex}` : undefined });
 }
 
 // ---- weather balloons (radiosonde_auto_rx payload summaries over UDP) -----------------------

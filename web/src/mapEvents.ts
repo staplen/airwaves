@@ -8,6 +8,7 @@ export interface Focus {
   ref?: string; // "air:<hex>", "sea:<mmsi>", "aprs:<call>", "balloon:<id>", "site:<id>": the live object, if still on the map
   lat?: number; // where the card says it happened (used when the object isn't on the map any more)
   lon?: number;
+  approxKm?: number; // lat/lon is only rough (within about this many km): the map fits the area instead of zooming in
   label?: string;
 }
 

@@ -193,6 +193,8 @@ export interface FeedItem {
   peaks?: string; // clip waveform: one character per bar, 0–63 (see collector/src/peaks.ts)
   lat?: number; // where it happened, when known (shown on the map when the card is clicked)
   lon?: number;
+  approxKm?: number; // lat/lon is only rough: the true spot is within about this many km (drawn as an area, not a dot)
+  altFt?: number; // altitude reported with that position, when there was one
   ref?: string; // the map object it's about: "air:<hex>", "sea:<mmsi>", "aprs:<call>", "balloon:<id>", "site:<id>"
 }
 
