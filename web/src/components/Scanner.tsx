@@ -81,8 +81,9 @@ export function Scanner({ snapshot, connected, status, dialOpen, onToggleDial, e
   // The family's slots in loop order, each as wide as its minutes in this pass (a slot outside its time window still
   // gets a sliver so it's listed); curIdx is the running one.
   const slotMinutes = onSlots.map((id) => Math.max(0.4, loop.filter((e) => e.sourceId === id).reduce((a, e) => a + e.minutes, 0) || 0.4));
-  // A floor on each column keeps short slots' names readable; segments and names share the columns so they line up.
-  const slotCols = slotMinutes.map((m) => `minmax(92px, ${m}fr)`).join(' ');
+  // Each column is at least as wide as its own label, with the space left over shared out by minutes; the countdown
+  // segments sit in the same grid (second row) so they always line up with the names.
+  const slotCols = slotMinutes.map((m) => `minmax(max-content, ${m}fr)`).join(' ');
   const curIdx = cur ? onSlots.indexOf(cur.sourceId) : -1;
 
   const bar = (b: FamilyBand, side: 'past' | 'next') => {
@@ -161,16 +162,12 @@ export function Scanner({ snapshot, connected, status, dialOpen, onToggleDial, e
                 <div key={id} className={`sc-s${active ? ' now' : ''}`} title={title}>{inner}</div>
               );
             })}
-          </div>
-        )}
-        {/* One countdown along the card's bottom edge, split into the family's slots (sized by their minutes, lined up
-            with the names above): played ones dim, the running one filling, the rest still to come. */}
-        {onSlots.length > 0 && (
-          <div className="sc-segs" style={{ gridTemplateColumns: slotCols }} aria-hidden="true">
+            {/* One countdown along the card's bottom edge, split into the family's slots: played ones dim, the running
+                one filling, the rest still to come. */}
             {onSlots.map((id, k) => {
               const state = k < curIdx ? 'done' : k === curIdx ? 'now' : 'todo';
               return (
-                <span key={id} className={`sc-seg ${state}`}>
+                <span key={`seg-${id}`} className={`sc-seg ${state}`} style={{ gridColumn: k + 1 }} aria-hidden="true">
                   {state === 'now' && <i style={{ width: `${(rot?.mode === 'rotating' && cur?.endsAt ? progress : 1) * 100}%` }} />}
                 </span>
               );
