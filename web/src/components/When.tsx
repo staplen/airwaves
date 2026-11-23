@@ -42,18 +42,6 @@ export function timeRange(from: number, to: number, sec = false): string {
   return sa && sa === suffix(b) ? `${a.slice(0, -sa.length)}–${b}` : `${a}–${b}`;
 }
 
-/** "12–3 min ago", "40 s ago–just now", "7:40 AM–12 min ago": a run whose newest end is within the hour. */
-export function agoRange(from: number, to: number, now: number, sec = false): string {
-  const b = ago(to, now);
-  if (now - from >= HOUR_MS) return `${clockTime(from, sec)}–${b}`;
-  const a = ago(from, now);
-  if (a === b) return b;
-  for (const unit of [' min ago', ' s ago']) {
-    if (a.endsWith(unit) && b.endsWith(unit)) return `${a.slice(0, -unit.length)}–${b}`;
-  }
-  return b === 'just now' ? `${a}–just now` : `${a.replace(/ ago$/, '')}–${b}`;
-}
-
 /** "just now", "42 s ago", "12 min ago" for the last hour; the exact time in the viewer's own zone after that. */
 export function When({ ts, sec = false }: { ts: number; sec?: boolean }) {
   const now = useRecentNow(ts);
@@ -62,9 +50,10 @@ export function When({ ts, sec = false }: { ts: number; sec?: boolean }) {
   return now === null ? <time dateTime={iso}>{exact}</time> : <time dateTime={iso} title={exact}>{ago(ts, now)}</time>;
 }
 
-/** A run of items: relative while its newest is within the hour, a clock range after that. */
+/** A run of items: just its newest time, the way a single card shows it ("12 min ago"); hover for the whole run. */
 export function WhenRange({ from, to, sec = false }: { from: number; to: number; sec?: boolean }) {
   const now = useRecentNow(to);
-  const exact = timeRange(from, to, sec);
-  return now === null ? <span>{exact}</span> : <span title={exact}>{agoRange(from, to, now, sec)}</span>;
+  const exact = clockTime(to, sec);
+  const iso = new Date(to).toISOString();
+  return <time dateTime={iso} title={timeRange(from, to, sec)}>{now === null ? exact : ago(to, now)}</time>;
 }

@@ -29,7 +29,9 @@ body {
 }
 button { font: inherit; }
 
-.page { min-height: 100vh; padding: 20px; display: flex; flex-direction: column; gap: 16px; max-width: 1600px; margin: 0 auto; }
+/* The whole window: the map stage on top (feed and dial float over it), the scanner footer below. */
+.page { height: 100vh; height: 100dvh; display: grid; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; }
+.stage { position: relative; min-height: 0; overflow: hidden; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
 .lbl { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
 .mono { font-family: var(--mono); }
@@ -48,33 +50,50 @@ button.tog[aria-pressed='false'] { color: var(--muted); }
 .dial { padding: 18px 22px 14px; display: flex; flex-direction: column; gap: 12px; }
 .dial-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
 .freq { font-family: var(--mono); font-size: 34px; font-weight: 500; letter-spacing: -0.02em; }
-.ribbon { position: relative; height: 76px; }
-.ribbon-axis { position: absolute; left: 0; right: 0; top: 36px; height: 1px; background: var(--line-strong); }
-.band { position: absolute; top: 27px; height: 18px; border-radius: 4px; }
-.band span { position: absolute; left: 0; white-space: nowrap; font-size: 11px; font-weight: 600; }
+.ribbon { position: relative; }
+.ribbon-axis { position: absolute; left: 0; right: 0; height: 1px; background: var(--line-strong); }
+.band { position: absolute; height: 18px; border-radius: 4px; }
 .band.idle { opacity: .35; }
-.tick { position: absolute; top: 62px; font-size: 10px; color: var(--muted); transform: translateX(-50%); font-family: var(--mono); }
-.playhead { position: absolute; top: 16px; width: 2px; height: 40px; background: var(--live); box-shadow: 0 0 0 4px #4ade8033; transform: translateX(-1px); transition: left .6s ease; }
+.band-label { position: absolute; white-space: nowrap; font-size: 11px; font-weight: 600; line-height: 14px; }
+.band-label.idle { opacity: .55; }
+.tick { position: absolute; font-size: 10px; color: var(--muted); transform: translateX(-50%); font-family: var(--mono); }
+.playhead { position: absolute; width: 2px; background: var(--live); box-shadow: 0 0 0 4px #4ade8033; transform: translateX(-1px); transition: left .6s ease; }
 
-/* Main row */
-.main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 32%); gap: 16px; align-items: stretch; }
-.maincol { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-/* The feed fills the column beside the on-air card and map, scrolling inside it. */
-.feedcol { position: relative; min-width: 0; }
-.feedcol > .feed { position: absolute; inset: 0; height: auto; }
-@media (max-width: 1000px) {
-  .main { grid-template-columns: minmax(0, 1fr); }
-  .feedcol > .feed { position: static; height: 720px; }
-}
-.mapcard { min-width: 0; position: relative; overflow: hidden; height: 720px; }
+/* The map fills the stage edge to edge. */
+.stage > .mapcard { position: absolute; inset: 0; border: none; border-radius: 0; overflow: hidden; }
 .mapcard .maplibregl-map { position: absolute; inset: 0; }
+/* The feed floats over the map's right side: no panel of its own, just the search box and solid cards. */
+.feedfloat { position: absolute; top: 12px; right: 12px; bottom: 20px; width: clamp(300px, 30vw, 440px); z-index: 5; pointer-events: none; }
+.feedfloat > .feed { height: 100%; pointer-events: auto; }
+.feedfloat .feed-list { padding-bottom: 12px; -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 24px), transparent); mask-image: linear-gradient(180deg, #000 calc(100% - 24px), transparent); }
+.feedfloat .fsearch-box { background: rgba(15, 19, 25, .9); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: 0 6px 18px #0006; }
+.feedfloat .catch { box-shadow: 0 6px 18px #0005; }
+/* The dial opens over the bottom of the map, left of the feed, above the map controls. */
+.dialpop { position: absolute; left: 12px; bottom: 56px; right: calc(clamp(300px, 30vw, 440px) + 24px); z-index: 6; display: flex; flex-direction: column; gap: 6px; max-height: calc(100% - 108px); overflow-y: auto; }
+.dialpop > .dial { background: rgba(18, 22, 29, .95); box-shadow: 0 10px 30px #0008; }
+.dialpop .pin-open { align-self: flex-start; margin: 0; padding: 4px 10px; border-radius: 8px; background: rgba(18, 22, 29, .9); }
+@media (max-width: 1000px) {
+  .feedfloat { width: clamp(280px, 38vw, 380px); }
+  .dialpop { right: 12px; }
+}
 .overlay-tl { position: absolute; top: 14px; left: 14px; display: flex; flex-wrap: wrap; gap: 8px; max-width: 64%; z-index: 2; }
-.overlay-tr { position: absolute; top: 14px; right: 14px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; z-index: 2; }
-.overlay-b { position: absolute; left: 14px; right: 14px; bottom: 14px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: flex-end; z-index: 2; pointer-events: none; }
+/* Warnings sit under the layer tabs, clear of the floating feed. */
+.overlay-warn { position: absolute; top: 54px; left: 10px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; z-index: 2; }
+/* Bottom controls stop short of the floating feed on the right. */
+.overlay-b { position: absolute; left: 12px; right: calc(clamp(300px, 30vw, 440px) + 24px); bottom: 12px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: flex-end; z-index: 2; pointer-events: none; }
 .overlay-b > * { pointer-events: auto; }
+.map-view { padding: 0; gap: 0; min-height: 32px; overflow: hidden; }
+.map-view .zoom-btn { height: 32px; width: 34px; }
+.map-credits { position: absolute; right: 12px; bottom: 4px; z-index: 6; display: inline-flex; gap: 8px; font-size: 10px; line-height: 14px; white-space: nowrap; opacity: .3; text-shadow: 0 0 3px #000; }
+.map-credits a { color: var(--text-2); text-decoration: none; }
+.map-credits a:hover { color: var(--text); text-decoration: underline; }
+.map-credits:hover, .map-credits:focus-within { opacity: 1; }
+.map-view .recenter { width: auto; display: inline-flex; align-items: center; gap: 6px; padding: 0 11px 0 9px; font-size: 12px; font-weight: 500; color: var(--text-2); }
+@media (max-width: 1000px) { .overlay-b { right: calc(clamp(280px, 38vw, 380px) + 24px); } }
+@media (max-width: 720px) { .overlay-b { right: 12px; } }
 
 /* Feed */
-.feed { min-width: 0; display: flex; flex-direction: column; gap: 10px; height: 720px; }
+.feed { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
 /* Search-or-filter box: type tokens + free text in one field, suggestions below. */
 .fsearch { position: relative; }
 .fsearch-box { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 40px; padding: 3px 8px 3px 12px; border-radius: 10px; background: var(--card); border: 1px solid var(--line-strong); cursor: text; }
@@ -112,11 +131,15 @@ button.tog[aria-pressed='false'] { color: var(--muted); }
 /* Totals */
 
 @media (max-width: 720px) {
-  .page { padding: 12px; }
-  .mapcard { height: 520px; }
-  /* Phones: the feed scrolls with the page instead of inside its own box (iOS handles nested scrolling badly). */
-  .feed, .feedcol > .feed { height: auto; }
-  .feed-list { overflow: visible; padding-right: 0; }
+  /* Phones: the page scrolls. Map on top, the feed below it scrolling with the page (iOS handles nested scrolling
+     badly), the scanner pinned to the bottom of the screen. */
+  .page { height: auto; min-height: 100dvh; display: block; overflow: visible; }
+  .stage { overflow: visible; }
+  .stage > .mapcard { position: relative; inset: auto; height: 62vh; }
+  .feedfloat { position: static; width: auto; padding: 12px; pointer-events: auto; }
+  .feedfloat > .feed { height: auto; }
+  .feedfloat .feed-list { overflow: visible; padding-right: 0; -webkit-mask-image: none; mask-image: none; }
+  .dialpop { position: static; padding: 0 12px; max-height: none; }
   .freq { font-size: 26px; }
 }
 
@@ -168,9 +191,9 @@ button.tog[aria-pressed='false'] { color: var(--muted); }
 .clipper.compact .clipper-btn { width: 26px; height: 26px; }
 
 /* Reference bands (TV, cellular) above the heatmap, aligned with the dial's log scale */
-.ref-row { position: relative; height: 16px; margin-top: 2px; }
-.ref-band { position: absolute; top: 0; height: 14px; border-radius: 3px; background: #8b93a133; border: 1px solid #8b93a155; overflow: hidden; }
-.ref-band span { display: block; font-size: 9px; line-height: 12px; color: var(--muted); white-space: nowrap; text-align: center; overflow: hidden; text-overflow: ellipsis; padding: 0 2px; }
+.ref-row { position: relative; height: 28px; margin-top: 2px; }
+.ref-band { position: absolute; top: 0; height: 12px; border-radius: 3px; background: #8b93a133; border: 1px solid #8b93a155; overflow: hidden; }
+.ref-label { position: absolute; top: 15px; font-size: 9.5px; line-height: 12px; color: var(--muted); white-space: nowrap; }
 .heat { cursor: crosshair; }
 .heat-readout { color: var(--text-2); }
 
@@ -243,53 +266,71 @@ button.ftoken { font: inherit; font-size: 12px; cursor: pointer; padding: 3px 10
 .nav-card .muted { font-size: 11px; }
 .nav-card .alert { color: #ff7a7a; font-weight: 600; }
 
-/* Header: the Airwaves mark, chips for the families not on air, then the family on air opened into a card */
+/* Scanner footer: the family on air as a card in the middle, families heard most recently to its left, the ones coming
+   up to its right. Each family bar carries its last 24 hours of spectrum activity as a gradient (see spectrum.ts). */
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.loopband { display: flex; flex-direction: column; gap: 10px; }
-.lb-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.lb-brand { flex: none; display: flex; align-items: center; gap: 8px; }
-.lb-title { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
-.lb-status { font-size: 11px; color: var(--muted); }
-.lb-end { flex: none; display: flex; align-items: center; gap: 6px; margin-left: auto; }
-.lb-chips { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
-.fam { display: inline-flex; align-items: center; gap: 5px; min-height: 24px; padding: 0 9px; border-radius: 999px; background: var(--card); border: 1px solid var(--line); color: var(--text-2); font: 500 11.5px var(--sans, inherit); white-space: nowrap; cursor: pointer; }
-.fam:hover { border-color: var(--line-strong); }
-.fam:focus-visible, .slot:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
-.fam .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c); }
-.fam .n { font-family: var(--mono); color: var(--text); }
-.beta { font-size: 9px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); border: 1px dashed var(--line-strong); border-radius: 4px; padding: 0 4px; line-height: 14px; }
-.onair { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 10px; padding: 12px 16px 14px; border-radius: 14px; background: var(--card); border: 1px solid var(--line); }
-.onair-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
-.onair-freq { font-family: var(--mono); font-size: 32px; font-weight: 500; letter-spacing: -.02em; line-height: 1; }
-.onair-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border-radius: 999px; background: var(--raised); border: 1px solid var(--line-strong); font-size: 12px; font-weight: 500; color: var(--c); }
-.onair-chip .dot { width: 7px; height: 7px; border-radius: 50%; }
-.onair-slots { display: flex; flex-wrap: wrap; gap: 8px; }
-.slot { display: flex; flex-direction: column; gap: 1px; min-width: 110px; padding: 8px 12px; border-radius: 10px; background: var(--raised); border: 1px solid var(--line); text-align: left; font: inherit; color: inherit; }
-button.slot { cursor: pointer; }
-button.slot:hover { border-color: var(--line-strong); }
-.slot.now { border-color: var(--c); background: color-mix(in srgb, var(--c) 10%, var(--raised)); }
-.slot.is-beta { border-style: dashed; }
-.slot .k { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; font-weight: 600; color: var(--c); white-space: nowrap; }
-.slot .v { font-family: var(--mono); font-size: 18px; font-weight: 500; color: var(--text); }
-.slot .d { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
-.slot.now .d { color: var(--text-2); }
-.onair-prog { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--live); transition: width 1s linear; }
-.onair.switching-out::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, #ffffff14, transparent); transform: translateX(-100%); animation: sw-shimmer 1.4s ease-in-out infinite; pointer-events: none; }
+.beta { flex: none; font-size: 9px; letter-spacing: .04em; text-transform: none; color: var(--muted); border: 1px dashed #3a4352; border-radius: 4px; padding: 0 4px; line-height: 13px; font-weight: 500; }
+.scanner { display: grid; grid-template-columns: minmax(0, .8fr) minmax(380px, auto) minmax(0, 1.2fr) auto; gap: 18px; align-items: center; padding: 7px 14px 8px; border-top: 1px solid var(--line); background: #0f1319; }
+.sc-side { display: flex; gap: 6px; min-width: 0; align-items: flex-end; }
+.sc-fam { display: flex; flex-direction: column; gap: 3px; min-width: 64px; padding: 0; border: none; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.sc-fam:focus-visible, .sc-s:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; border-radius: 4px; }
+.sc-name { font-size: 11px; font-weight: 600; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sc-bar { height: 8px; border-radius: 3px; background-color: var(--c); opacity: .6; }
+.sc-sub { font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sc-fam.past { opacity: .6; }
+.sc-fam.past .sc-bar { opacity: .4; }
+.sc-fam:hover .sc-bar { opacity: .85; }
+.sc-onair { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 5px; padding: 6px 12px 7px; border-radius: 10px; background: color-mix(in srgb, var(--c) 7%, var(--card)); border: 1px solid var(--c); min-width: 0; }
+.sc-top { display: flex; align-items: baseline; gap: 9px; white-space: nowrap; min-width: 0; }
+.sc-live { width: 7px; height: 7px; border-radius: 50%; align-self: center; flex: none; box-shadow: 0 0 0 3px #4ade8033; }
+.sc-fname { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--c); }
+.sc-freq { font-size: 18px; font-weight: 500; letter-spacing: -.02em; line-height: 1; }
+.sc-slot { display: inline-flex; align-items: baseline; gap: 6px; font-size: 11.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sc-left { margin-left: auto; padding-left: 8px; font-size: 11.5px; color: var(--text-2); }
+.sc-slots { display: grid; gap: 3px; }
+.sc-s { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 0 8px 0 0; border: none; background: none; color: inherit; font: inherit; text-align: left; }
+button.sc-s { cursor: pointer; }
+.sc-srow { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 10.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-2); }
+.sc-sname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-srow b { flex: none; margin-left: 1px; font-size: 11px; font-weight: 500; color: var(--text); letter-spacing: 0; text-transform: none; }
+.sc-s.now .sc-srow { color: var(--c); }
+.sc-end { display: flex; gap: 6px; align-items: center; }
+/* The countdown: the card's bottom edge split into the family's slots. */
+.sc-segs { position: absolute; left: 12px; right: 12px; bottom: 0; display: grid; gap: 3px; height: 4px; }
+.sc-seg { position: relative; overflow: hidden; background: color-mix(in srgb, var(--c) 16%, transparent); }
+.sc-seg.done { background: color-mix(in srgb, var(--c) 45%, transparent); }
+.sc-seg i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--c); box-shadow: 0 0 8px color-mix(in srgb, var(--c) 60%, transparent); transition: width 1s linear; }
+.sc-onair { padding-bottom: 11px; }
+.sc-onair.switching-out::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, #ffffff14, transparent); transform: translateX(-100%); animation: sw-shimmer 1.4s ease-in-out infinite; pointer-events: none; }
+@media (max-width: 1100px) {
+  .scanner { grid-template-columns: minmax(0, .7fr) minmax(320px, auto) minmax(0, 1fr) auto; gap: 12px; }
+  .sc-fam { min-width: 52px; }
+}
 @media (max-width: 720px) {
-  /* Phone: the mark and buttons on one line, the family chips in a swipeable row under it */
-  .lb-head { flex-wrap: wrap; }
-  .lb-chips { order: 3; flex-basis: 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-mask-image: linear-gradient(90deg, #000 88%, transparent); mask-image: linear-gradient(90deg, #000 88%, transparent); padding-bottom: 2px; }
-  .lb-chips::-webkit-scrollbar { display: none; }
-  .onair { padding: 12px 14px 14px; }
-  .onair-freq { font-size: 26px; }
-  .slot { min-width: 0; flex: 1 1 calc(50% - 8px); }
+  /* Phone: pinned to the bottom of the screen; the on-air card on top, the other families in a swipeable row. */
+  .scanner { position: sticky; bottom: 0; z-index: 10; display: flex; flex-wrap: wrap; gap: 8px 10px; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
+  .sc-onair { order: -2; flex: 1 1 calc(100% - 52px); }
+  .sc-end { order: -1; flex-direction: column; }
+  /* Every family, heard or coming up, wraps into rows under the card. */
+  .sc-side { display: contents; }
+  .sc-fam { flex: 1 0 84px !important; }
+  .sc-fam.past { opacity: .75; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .onair-prog { transition: none; }
-  .onair.switching-out::after { animation: none; }
+  .sc-seg i { transition: none; }
+  .sc-onair.switching-out::after { animation: none; }
 }
 /* Feed card button that flies the map to where the catch happened */
 .locate { flex: none; width: 26px; height: 26px; margin: -4px -6px -4px 0; border-radius: 7px; border: 1px solid transparent; background: none; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
 .locate:hover { color: var(--text); border-color: var(--line-strong); background: var(--raised); }
 .locate:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
 
+/* Family heading row in the type checklist: switches the whole family, with its own "only". */
+/* Family heading rows: bigger, bold and coloured, with a rule between families; their types sit indented under them. */
+.fcheck-fam { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); border-radius: 0; min-height: 34px; }
+.fcheck-all + div > .fcheck-fam { margin-top: 0; padding-top: 0; border-top: none; }
+.fcheck-fam .fmenu-sect { font-size: 12px; font-weight: 700; letter-spacing: .07em; }
+.fcheck-fam input { width: 16px; height: 16px; }
+.fcheck-sub { padding-left: 34px; min-height: 30px; font-size: 13px; color: var(--text-2); }
+.fcheck-sub label { min-height: 30px; gap: 9px; }
+.fcheck-sub input { width: 13px; height: 13px; }

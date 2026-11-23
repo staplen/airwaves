@@ -128,6 +128,14 @@ export const Feed = memo(function Feed({ items }: { items: FeedItem[] }) {
     offTypes.length === 0 ? 'All types' : onTypes.length === 0 ? 'No types' : onTypes.length === 1 ? `Only ${onTypes[0].label}` : offTypes.length === 1 ? `All but ${offTypes[0].label}` : `${onTypes.length} of ${listed.length} types`;
   const toggle = (id: string) => setHidden(hidden.includes(id) ? hidden.filter((x) => x !== id) : [...hidden, id]);
   const only = (id: string) => setHidden(TYPES.map((t) => t.id).filter((x) => x !== id));
+  // A whole family at once: its heading's checkbox switches all its types, its "only" hides every other family.
+  const familyIds = (f: Family) => TYPES.filter((t) => t.family === f).map((t) => t.id);
+  const toggleFamily = (f: Family) => {
+    const ids = familyIds(f);
+    const allShown = ids.every((id) => !hidden.includes(id));
+    setHidden(allShown ? [...new Set([...hidden, ...ids])] : hidden.filter((x) => !ids.includes(x)));
+  };
+  const onlyFamily = (f: Family) => setHidden(TYPES.filter((t) => t.family !== f).map((t) => t.id));
   const allOn = () => setHidden([]);
 
   // While typing: the most common item titles that match, as one-tap searches.
@@ -261,12 +269,12 @@ export const Feed = memo(function Feed({ items }: { items: FeedItem[] }) {
             ref={input}
             type="search"
             role="combobox"
-            aria-label="Search feed"
+            aria-label="Search Airwaves"
             aria-expanded={menuOpen}
             aria-controls="feed-suggest"
             aria-activedescendant={menuOpen && active >= 0 ? `feed-opt-${active}` : undefined}
             aria-autocomplete="list"
-            placeholder="Search feed"
+            placeholder="Search Airwaves"
             value={query}
             onChange={(e) => { setQuery(e.target.value); setOpen(true); setTypesOpen(false); }}
             onFocus={() => setOpen(true)}
@@ -292,11 +300,22 @@ export const Feed = memo(function Feed({ items }: { items: FeedItem[] }) {
               if (rows.length === 0) return null;
               return (
                 <div key={f} style={{ display: 'contents' }}>
-                  <div className="fmenu-sect" style={{ color: FAMILY_COLOR[f] }}>{FAMILY_LABEL[f]}</div>
+                  <div className="fcheck fcheck-fam">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={rows.every((t) => !hidden.includes(t.id))}
+                        ref={(el) => { if (el) el.indeterminate = rows.some((t) => hidden.includes(t.id)) && rows.some((t) => !hidden.includes(t.id)); }}
+                        onChange={() => toggleFamily(f)}
+                      />
+                      <span className="fmenu-sect" style={{ color: FAMILY_COLOR[f], padding: 0 }}>{FAMILY_LABEL[f]}</span>
+                    </label>
+                    <button type="button" className="fonly" onClick={() => onlyFamily(f)} aria-label={`Show only ${FAMILY_LABEL[f]}`}>only</button>
+                  </div>
                   {rows.map((t) => {
                     const n = counts.get(t.id) ?? 0;
                     return (
-                      <div key={t.id} className={n ? 'fcheck' : 'fcheck empty'}>
+                      <div key={t.id} className={n ? 'fcheck fcheck-sub' : 'fcheck fcheck-sub empty'}>
                         <label>
                           <input type="checkbox" checked={!hidden.includes(t.id)} onChange={() => toggle(t.id)} />
                           <span>{t.label}</span>

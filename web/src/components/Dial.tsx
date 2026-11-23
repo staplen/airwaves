@@ -1,33 +1,71 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Snapshot, SpectrumHeat } from '../../../shared/types.ts';
-import { apiUrl } from '../api.ts';
 import { dur, slotName } from '../live.ts';
+import { useSpectrum } from '../spectrum.ts';
 import { BANDS, FAMILY_COLOR, REF_BANDS, bandAt, dialFreq, dialX } from '../bands.ts';
 
 const TICKS = [100, 200, 300, 500, 700, 1000];
+const BAND_H = 18;
+const LANE_H = 16;
+const LABEL_PX = 6.8; // rough width of one 11 px semibold character
+const LANES = [-1, 1, -2, 2, -3, 3]; // above the axis, then below, then further out
+
+type Align = 'left' | 'center' | 'right';
+
+/** Where a label sits: centred on its x, or pinned to the dial's edge when centring would push it off. */
+function edgeAlign(xPx: number, textPx: number, widthPx: number): Align {
+  if (xPx - textPx / 2 < 0) return 'left';
+  if (xPx + textPx / 2 > widthPx) return 'right';
+  return 'center';
+}
+
+/** Absolute position for a label at x% with the given alignment. */
+function labelPos(x: number, align: Align): React.CSSProperties {
+  if (align === 'left') return { left: 0 };
+  if (align === 'right') return { right: 0 };
+  return { left: `${x}%`, transform: 'translateX(-50%)' };
+}
+
+/**
+ * Greedy lane assignment, left to right: each label takes the first lane (above, below, then further out) where it
+ * doesn't touch a label already placed there.
+ */
+function placeLabels(items: { key: string; text: string; x: number }[], widthPx: number, charPx: number): Map<string, { lane: number; align: Align }> {
+  const out = new Map<string, { lane: number; align: Align }>();
+  const taken = new Map<number, [number, number][]>();
+  for (const it of [...items].sort((a, b) => a.x - b.x)) {
+    const w = it.text.length * charPx + 6;
+    const px = (it.x / 100) * widthPx;
+    const align = edgeAlign(px, w, widthPx);
+    const span: [number, number] = align === 'left' ? [0, w] : align === 'right' ? [widthPx - w, widthPx] : [px - w / 2, px + w / 2];
+    const lane = LANES.find((l) => !(taken.get(l) ?? []).some(([a, b]) => span[0] < b + 8 && span[1] > a - 8)) ?? LANES[LANES.length - 1];
+    taken.set(lane, [...(taken.get(lane) ?? []), span]);
+    out.set(it.key, { lane, align });
+  }
+  return out;
+}
+
+/** Reference bands grouped by kind when they sit close together ("Cell 600–850"), with one label per group. */
+function groupRefs(widthPx: number): { label: string; x: number; align: Align }[] {
+  const groups: { kind: string; names: string[]; lo: number; hi: number }[] = [];
+  for (const b of REF_BANDS) {
+    const kind = b.name.split(' ')[0];
+    const last = groups[groups.length - 1];
+    if (last && last.kind === kind && dialX(b.lo) - dialX(last.hi) < 4) {
+      last.names.push(b.name);
+      last.hi = b.hi;
+    } else groups.push({ kind, names: [b.name], lo: b.lo, hi: b.hi });
+  }
+  return groups.map((g) => {
+    const label = g.names.length > 1 ? `${g.kind} ${g.names[0].split(' ')[1]}–${g.names[g.names.length - 1].split(' ')[1]}` : g.names[0];
+    const x = (dialX(g.lo) + dialX(g.hi)) / 2;
+    return { label, x, align: edgeAlign((x / 100) * widthPx, label.length * 5.8 + 4, widthPx) };
+  });
+}
 
 function remaining(endsAt: number, now: number): string {
   const s = Math.max(0, Math.round((endsAt - now) / 1000));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-}
-
-function useSpectrum(): SpectrumHeat | undefined {
-  const [heat, setHeat] = useState<SpectrumHeat>();
-  useEffect(() => {
-    let alive = true;
-    const load = () =>
-      fetch(apiUrl('spectrum'))
-        .then((r) => (r.ok ? (r.json() as Promise<SpectrumHeat>) : undefined))
-        .then((h) => alive && h && setHeat(h))
-        .catch(() => {});
-    load();
-    const t = setInterval(load, 5 * 60_000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, []);
-  return heat;
 }
 
 function Heatmap({ heat, onHover }: { heat?: SpectrumHeat; onHover: (text?: string) => void }) {
@@ -76,6 +114,30 @@ export function Dial({ snapshot }: { snapshot?: Snapshot }) {
   const [hover, setHover] = useState<string>();
   const continuous = !snapshot || snapshot.rotation.mode === 'continuous';
 
+  // Lay the band names out in lanes above and below the axis so none overlap, at whatever width the dial is.
+  const ribbonRef = useRef<HTMLDivElement>(null);
+  const [widthPx, setWidthPx] = useState(900);
+  useEffect(() => {
+    const el = ribbonRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setWidthPx(e.contentRect.width || 900));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const bands = BANDS.map((b) => {
+    const left = dialX(b.lo);
+    return { name: b.name, left, width: Math.max(0.9, dialX(b.hi) - left), active: b.sourceIds.some((id) => running.has(id)), color: FAMILY_COLOR[b.family] };
+  });
+  const placed = placeLabels(bands.map((b) => ({ key: b.name, text: b.name, x: b.left + b.width / 2 })), widthPx, LABEL_PX);
+  const above = Math.max(0, ...[...placed.values()].map((p) => -p.lane));
+  const below = Math.max(0, ...[...placed.values()].map((p) => p.lane));
+  const bandTop = 4 + above * LANE_H;
+  const laneTop = (lane: number) => (lane < 0 ? bandTop - 2 + lane * LANE_H : bandTop + BAND_H + 2 + (lane - 1) * LANE_H);
+  const tickTop = bandTop + BAND_H + 4 + below * LANE_H;
+  const ribbonH = tickTop + 14;
+  // Reference bands: neighbours of one kind (the three cell bands) share one label, centred over the group.
+  const refGroups = groupRefs(widthPx);
+
   return (
     <section className="card dial" aria-label="Receiver dial">
       <div className="dial-head">
@@ -111,36 +173,37 @@ export function Dial({ snapshot }: { snapshot?: Snapshot }) {
         </div>
       </div>
 
-      <div className="ribbon">
-        <div className="ribbon-axis" />
-        {BANDS.map((b, i) => {
-          const left = dialX(b.lo);
-          const width = Math.max(0.9, dialX(b.hi) - left);
-          const active = b.sourceIds.some((id) => running.has(id));
-          const color = FAMILY_COLOR[b.family];
+      <div className="ribbon" ref={ribbonRef} style={{ height: ribbonH }}>
+        <div className="ribbon-axis" style={{ top: bandTop + BAND_H / 2 }} />
+        {bands.map((b) => (
+          <div
+            key={b.name}
+            className={b.active ? 'band' : 'band idle'}
+            style={{ left: `${b.left}%`, width: `${b.width}%`, top: bandTop, background: b.color }}
+            title={b.active ? `${b.name}: decoding` : `${b.name}: not running yet`}
+          />
+        ))}
+        {bands.map((b) => {
+          const p = placed.get(b.name)!;
           return (
-            <div
-              key={b.name}
-              className={active ? 'band' : 'band idle'}
-              style={{ left: `${left}%`, width: `${width}%`, background: color }}
-              title={active ? `${b.name}: decoding` : `${b.name}: not running yet`}
-            >
-              <span style={{ color, top: i % 2 === 0 ? -22 : 24 }}>{b.name}</span>
-            </div>
+            <span key={b.name} className={b.active ? 'band-label' : 'band-label idle'} aria-hidden="true" style={{ ...labelPos(b.left + b.width / 2, p.align), top: laneTop(p.lane), color: b.color }}>
+              {b.name}
+            </span>
           );
         })}
         {TICKS.map((t) => (
-          <span key={t} className="tick" style={{ left: `${dialX(t)}%` }}>
+          <span key={t} className="tick" style={{ left: `${dialX(t)}%`, top: tickTop }}>
             {t}
           </span>
         ))}
-        {current && <div className="playhead" style={{ left: `${dialX(current.freqMhz)}%` }} />}
+        {current && <div className="playhead" style={{ left: `${dialX(current.freqMhz)}%`, top: bandTop - 6, height: BAND_H + 12 }} />}
       </div>
       <div className="ref-row" aria-hidden="true">
         {REF_BANDS.map((b) => (
-          <span key={b.name} className="ref-band" style={{ left: `${dialX(b.lo)}%`, width: `${dialX(b.hi) - dialX(b.lo)}%` }} title={`${b.name}: ${b.lo}–${b.hi} MHz, not decoded`}>
-            <span>{b.name}</span>
-          </span>
+          <span key={b.name} className="ref-band" style={{ left: `${dialX(b.lo)}%`, width: `${dialX(b.hi) - dialX(b.lo)}%` }} title={`${b.name}: ${b.lo}–${b.hi} MHz, not decoded`} />
+        ))}
+        {refGroups.map((g) => (
+          <span key={g.label} className="ref-label" style={labelPos(g.x, g.align)}>{g.label}</span>
         ))}
       </div>
       <Heatmap heat={heat} onHover={setHover} />

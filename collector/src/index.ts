@@ -246,6 +246,8 @@ const top = (xs: string[]) => {
   return [...m].sort((a, b) => b[1] - a[1])[0]?.[0];
 };
 const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+/** Just the word, agreeing with the count: noun(1, 'call') → "call", noun(3, 'call') → "calls". */
+const noun = (n: number, one: string, many = `${one}s`) => (n === 1 ? one : many);
 
 function slotStats(now: number, aircraft: Aircraft[]): Record<string, SlotStat> {
   // Cheap parts (live aircraft) are recomputed every call; the feed-derived parts every 15 s.
@@ -267,47 +269,49 @@ function slotStats(now: number, aircraft: Aircraft[]): Record<string, SlotStat> 
     const pinnedTemp = pins.find((p) => p.metric === 'temperatureF');
     const temp = pinnedTemp && sensors.get(pinnedTemp.key)?.temperatureF;
     const balloons = sondes.recent(now);
+    const vdl2Flights = store.countSightings(day, 'vdl2');
+    const acarsFlights = store.countSightings(day, 'acars');
     const v: Record<string, SlotStat> = {
-      atc: { value: atc.length.toLocaleString('en-US'), label: 'calls today', short: 'calls', brief: atcHour.length ? `${atcHour.length} this hour` : undefined, detail: atcHour.length ? `${atcHour.length} this hour · busiest ${top(atcHour.map((f) => f.title))}` : undefined },
-      ais: { value: String(ships), label: 'ships today', short: 'ships', brief: aisFixed.size ? plural(aisFixed.size, 'marker') : undefined, detail: lastShip && now - lastShip.lastSeen < 86_400_000 ? `latest: ${lastShip.name ?? lastShip.mmsi}` : aisFixed.size ? `${plural(aisFixed.size, 'channel marker')} heard` : undefined },
-      vdl2: { value: store.countSightings(day, 'vdl2').toLocaleString('en-US'), label: 'flights on datalink', short: 'flights', brief: top(airlines), detail: top(airlines) ? `top airline: ${top(airlines)}` : undefined },
+      atc: { value: atc.length.toLocaleString('en-US'), label: `${noun(atc.length, 'call')} today`, short: noun(atc.length, 'call'), brief: atcHour.length ? `${atcHour.length} this hour` : undefined, detail: atcHour.length ? `${atcHour.length} this hour · busiest ${top(atcHour.map((f) => f.title))}` : undefined },
+      ais: { value: String(ships), label: `${noun(ships, 'ship')} today`, short: noun(ships, 'ship'), brief: aisFixed.size ? plural(aisFixed.size, 'marker') : undefined, detail: lastShip && now - lastShip.lastSeen < 86_400_000 ? `latest: ${lastShip.name ?? lastShip.mmsi}` : aisFixed.size ? `${plural(aisFixed.size, 'channel marker')} heard` : undefined },
+      vdl2: { value: vdl2Flights.toLocaleString('en-US'), label: `${noun(vdl2Flights, 'flight')} on datalink`, short: noun(vdl2Flights, 'flight'), brief: top(airlines), detail: top(airlines) ? `top airline: ${top(airlines)}` : undefined },
       ism:
         temp !== undefined
           ? { value: `${Math.round(temp)}°F`, label: pinnedTemp!.label, short: 'outside', brief: plural(cars, 'car'), detail: plural(cars, 'car') + ' passed today' }
-          : { value: String(cars), label: 'cars passed', short: 'cars', brief: sensors.size ? plural(sensors.size, 'sensor') : undefined, detail: sensors.size ? `${plural(sensors.size, 'sensor')} heard` : undefined },
+          : { value: String(cars), label: `${noun(cars, 'car')} passed`, short: noun(cars, 'car'), brief: sensors.size ? plural(sensors.size, 'sensor') : undefined, detail: sensors.size ? `${plural(sensors.size, 'sensor')} heard` : undefined },
       uat: (() => {
         const n = store.countSightings(day, 'uat');
         const gs = [...uat.stations.values()].filter((st) => now - st.lastHeard < 86_400_000).length;
-        return { value: n.toLocaleString('en-US'), label: 'aircraft on 978 today', short: 'on 978', brief: gs ? `${gs} ground station${gs === 1 ? '' : 's'}` : undefined, detail: `${uat.uplinks.toLocaleString('en-US')} FIS-B frames${gs ? ` from ${gs} ground station${gs === 1 ? '' : 's'}` : ''}` };
+        return { value: n.toLocaleString('en-US'), label: 'aircraft on 978 today', short: 'on 978', brief: gs ? plural(gs, 'ground station') : undefined, detail: `${uat.uplinks.toLocaleString('en-US')} FIS-B frames${gs ? ` from ${gs} ground station${gs === 1 ? '' : 's'}` : ''}` };
       })(),
       aprs: (() => {
         const n = store.countSightings(day, 'aprs');
         const wx = aprs.recent(now).filter((st) => st.weather).length;
-        return { value: n.toLocaleString('en-US'), label: 'APRS stations today', short: 'stations', brief: wx ? `${wx} weather` : undefined, detail: wx ? `${wx} weather station${wx === 1 ? '' : 's'}` : 'amateur radio on 144.39 MHz' };
+        return { value: n.toLocaleString('en-US'), label: `APRS ${noun(n, 'station')} today`, short: noun(n, 'station'), brief: wx ? `${wx} weather` : undefined, detail: wx ? `${wx} weather station${wx === 1 ? '' : 's'}` : 'amateur radio on 144.39 MHz' };
       })(),
-      acars: { value: store.countSightings(day, 'acars').toLocaleString('en-US'), label: 'flights on VHF ACARS', short: 'flights', brief: '130–131.5 MHz', detail: 'plain ACARS beside VDL2 datalink' },
+      acars: { value: acarsFlights.toLocaleString('en-US'), label: `${noun(acarsFlights, 'flight')} on VHF ACARS`, short: noun(acarsFlights, 'flight'), brief: '130–131.5 MHz', detail: 'plain ACARS beside VDL2 datalink' },
       rail: railStat(),
       probe: (() => {
         const ps = Object.values(survey.probes ?? {});
         const named = ps.filter((x) => x.latest.guess !== 'idle').length;
-        return { value: String(ps.length), label: 'channels identified', short: 'channels', brief: `${named} active`, detail: ps.length ? ps.slice(-3).map((x) => `${x.latest.mhz.toFixed(3)}: ${x.latest.guess}`).join(' · ') : 'listening to survey finds, one per visit' };
+        return { value: String(ps.length), label: `${noun(ps.length, 'channel')} identified`, short: noun(ps.length, 'channel'), brief: `${named} active`, detail: ps.length ? ps.slice(-3).map((x) => `${x.latest.mhz.toFixed(3)}: ${x.latest.guess}`).join(' · ') : 'listening to survey finds, one per visit' };
       })(),
       survey: (() => {
         const found = surveyReport(survey).length;
         const runs = Object.values(survey.surveys).reduce((a, b) => a + b, 0);
-        return { value: String(found), label: 'channels found', short: 'channels', brief: `${runs} sweeps`, detail: `${runs} fine sweeps so far · /api/survey` };
+        return { value: String(found), label: `${noun(found, 'channel')} found`, short: noun(found, 'channel'), brief: plural(runs, 'sweep'), detail: `${plural(runs, 'fine sweep')} so far · /api/survey` };
       })(),
       trains: (() => {
         const t = trainsToday.day === day ? trainsToday : { bursts: 0, units: [] as number[] };
         const units = t.units?.length ?? 0;
         // Decoded end-of-train devices count as trains; bursts too noisy to decode are listed beside them.
         return units
-          ? { value: String(units), label: units === 1 ? 'train' : 'trains', short: 'trains', brief: `${t.bursts} bursts`, detail: `${t.bursts} bursts on 457.94 MHz${'dpu' in t && t.dpu ? ` · ${t.dpu} distributed-power (beta)` : ''}` }
-          : { value: String(t.bursts), label: 'train bursts', short: 'bursts', brief: 'probe', detail: 'probe on 457.94 MHz' };
+          ? { value: String(units), label: noun(units, 'train'), short: noun(units, 'train'), brief: plural(t.bursts, 'burst'), detail: `${plural(t.bursts, 'burst')} on 457.94 MHz${'dpu' in t && t.dpu ? ` · ${t.dpu} distributed-power (beta)` : ''}` }
+          : { value: String(t.bursts), label: `train ${noun(t.bursts, 'burst')}`, short: noun(t.bursts, 'burst'), brief: 'probe', detail: 'probe on 457.94 MHz' };
       })(),
-      noaa: { value: String(wxClips), label: 'weather radio clips', short: 'clips', brief: alerts ? plural(alerts, 'alert') : 'no alerts', detail: alerts ? plural(alerts, 'alert') + ' today' : tests.length ? `weekly test at ${new Date(tests[0].ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: env.TIMEZONE ?? 'America/New_York' })}` : 'no alerts today' },
-      sonde: { value: String(balloons.length), label: balloons.length === 1 ? 'balloon' : 'balloons', short: 'balloons', brief: balloons[0]?.id, detail: balloons[0] ? `${balloons[0].id} at ${(balloons[0].altM / 1000).toFixed(1)} km` : 'launches ~7 AM & 7 PM' },
-      hdradio: { value: String(songs.length), label: 'songs today', short: 'songs', brief: lastSong?.title.replace(/ HD\d$/, ''), detail: lastSong ? `${lastSong.body} · ${lastSong.title.replace(/ HD\d$/, '')}` : undefined },
+      noaa: { value: String(wxClips), label: `weather radio ${noun(wxClips, 'clip')}`, short: noun(wxClips, 'clip'), brief: alerts ? plural(alerts, 'alert') : 'no alerts', detail: alerts ? plural(alerts, 'alert') + ' today' : tests.length ? `weekly test at ${new Date(tests[0].ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: env.TIMEZONE ?? 'America/New_York' })}` : 'no alerts today' },
+      sonde: { value: String(balloons.length), label: noun(balloons.length, 'balloon'), short: noun(balloons.length, 'balloon'), brief: balloons[0]?.id, detail: balloons[0] ? `${balloons[0].id} at ${(balloons[0].altM / 1000).toFixed(1)} km` : 'launches ~7 AM & 7 PM' },
+      hdradio: { value: String(songs.length), label: `${noun(songs.length, 'song')} today`, short: noun(songs.length, 'song'), brief: lastSong?.title.replace(/ HD\d$/, ''), detail: lastSong ? `${lastSong.body} · ${lastSong.title.replace(/ HD\d$/, '')}` : undefined },
       spectrum: { label: 'spectrum sweep', short: 'sweep', brief: 'hourly', detail: 'hourly · 80–1150 MHz' },
     };
     statsCache = { at: now, value: v };
@@ -1040,7 +1044,7 @@ function railStat(): SlotStat {
     /* no recordings yet */
   }
   const top = [...byFreq].sort((a, b) => b[1] - a[1])[0];
-  const stat: SlotStat = { value: String(n), label: 'transmissions (24 h)', short: 'transmissions', brief: top ? `busiest ${(Number(top[0]) / 1000).toFixed(3)}` : 'listening', detail: top ? `busiest channel ${(Number(top[0]) / 1000).toFixed(3)} MHz` : 'listening to every railroad channel' };
+  const stat: SlotStat = { value: String(n), label: `${noun(n, 'transmission')} (24 h)`, short: noun(n, 'transmission'), brief: top ? `busiest ${(Number(top[0]) / 1000).toFixed(3)}` : 'listening', detail: top ? `busiest channel ${(Number(top[0]) / 1000).toFixed(3)} MHz` : 'listening to every railroad channel' };
   railCache = { at: now, stat };
   return stat;
 }

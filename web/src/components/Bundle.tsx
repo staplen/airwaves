@@ -145,7 +145,7 @@ export function BundleCard({ items, renderItem }: { items: FeedItem[]; renderIte
                 ? `Playing ${idx + 1} of ${playable.length}: ${cur.title}`
                 : idx > 0
                   ? `Paused at ${idx + 1} of ${playable.length}: ${cur.title}`
-                  : `Plays ${playable.length} clips starting with ${cur.title}`}
+                  : `Plays ${playable.length} ${playable.length === 1 ? 'clip' : 'clips'} starting with ${cur.title}`}
             </div>
           </>
         ) : hadClips ? (

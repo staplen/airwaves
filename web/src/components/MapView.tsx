@@ -82,6 +82,9 @@ function shipImage(): ImageData {
 type NavIcon = 'nav-port' | 'nav-stbd' | 'nav-light' | 'nav-other' | 'nav-station';
 
 /** Chart-style symbols: green can (port hand), red nun (starboard hand), magenta light flare, yellow diamond, shore station mast. */
+/** Whether to draw the receiver's antenna icon on the map (off until there's a better icon). */
+const SHOW_RECEIVER = false;
+
 /** The receiver: a yagi on a mast with a foot, green over a dark outline, drawn at 2x for a crisp 18 px icon. */
 function receiverImage(): ImageData {
   const k = 2;
@@ -408,7 +411,8 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
   const [tracks, setTracks] = useState<Tracks>();
   const tracksRef = useRef<Tracks>(undefined);
   tracksRef.current = tracks;
-  const [trails, setTrails] = useState(true);
+  // Trails are always on now (the toggle was cut with the redesign); kept as state so it's easy to bring back.
+  const [trails] = useState(true);
   const approx = useRef(false);
   const onScreen = useRef(true);
   const snapRef = useRef<Snapshot | undefined>(snapshot);
@@ -424,24 +428,9 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
   }, []);
 
   useEffect(() => {
-    const m = new MlMap({ container: el.current!, style: STYLE, center: [-77.03, 38.9], zoom: 8.6, attributionControl: { compact: true } });
+    const m = new MlMap({ container: el.current!, style: STYLE, center: [-77.03, 38.9], zoom: 8.6, attributionControl: false });
     map.current = m;
     let pulse = 0;
-    // MapLibre opens the compact attribution ("ⓘ") on load, and again whenever a source's attribution updates or the
-    // map resizes (always on narrow screens), covering the legends. Keep it closed unless the viewer taps the button.
-    const attrib = m.getContainer().querySelector<HTMLElement>('.maplibregl-ctrl-attrib');
-    let attribOpen = false;
-    const onAttribClick = (e: Event) => {
-      if ((e.target as HTMLElement).closest('.maplibregl-ctrl-attrib-button')) attribOpen = !attribOpen;
-    };
-    attrib?.addEventListener('click', onAttribClick, true);
-    const attribObserver = new MutationObserver(() => {
-      if (attrib && attrib.classList.contains('maplibregl-compact-show') !== attribOpen) attrib.classList.toggle('maplibregl-compact-show', attribOpen);
-    });
-    if (attrib) {
-      attrib.classList.remove('maplibregl-compact-show');
-      attribObserver.observe(attrib, { attributes: true, attributeFilter: ['class'] });
-    }
     // Hover a marker for its card (tap on touch screens): one shared popup, replaced as the pointer moves.
     const hover = new Popup({ closeButton: false, closeOnClick: false, className: 'nav-popup', offset: 10 });
     let shown: unknown;
@@ -502,7 +491,7 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
         if (tr.info?.owner) lines.push([tr.info.owner, 'muted']);
         lines.push([`Seen ${timeRange(first, last)}${alts.length ? ` · ${fmtFt(Math.min(...alts))}–${fmtFt(Math.max(...alts))}` : ''}`]);
         lines.push([`Here at ${fmtTime(Number(f.properties?.t) * 1000)}${here >= 0 ? `, ${fmtFt(here)}` : ''}`, 'muted']);
-        lines.push([`${tr.pts.length} points · from ${(tr.info?.sources ?? [tr.kind === 'dl' ? 'datalink' : tr.kind === 'sea' ? 'AIS' : 'ADS-B']).join(' + ')}`, 'muted']);
+        lines.push([`${tr.pts.length} ${tr.pts.length === 1 ? 'point' : 'points'} · from ${(tr.info?.sources ?? [tr.kind === 'dl' ? 'datalink' : tr.kind === 'sea' ? 'AIS' : 'ADS-B']).join(' + ')}`, 'muted']);
         return { at: [e.lngLat.lng, e.lngLat.lat], card: card(lines) };
       });
       // APRS stations (amateur radio): green dots, weather stations amber; UAT ground stations: hollow squares.
@@ -532,7 +521,7 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
         const f = e.features?.[0];
         if (!f || f.geometry.type !== 'Point') return undefined;
         const st = JSON.parse(String(f.properties?.info)) as UatStation;
-        return { at: f.geometry.coordinates as [number, number], card: card([['UAT ground station'], ['FIS-B weather and flight information broadcasts on 978 MHz'], [`${st.frames.toLocaleString('en-US')} frames heard · last ${fmtTime(st.lastHeard)}`, 'muted']]) };
+        return { at: f.geometry.coordinates as [number, number], card: card([['UAT ground station'], ['FIS-B weather and flight information broadcasts on 978 MHz'], [`${st.frames.toLocaleString('en-US')} ${st.frames === 1 ? 'frame' : 'frames'} heard · last ${fmtTime(st.lastHeard)}`, 'muted']]) };
       });
       m.addLayer({ id: 'rings', type: 'line', source: 'rings', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#3a4659', 'line-width': 1, 'line-dasharray': [2, 3] } });
       m.addLayer({ id: 'ring-labels', type: 'symbol', source: 'rings', filter: ['has', 'label'], layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 10, 'text-offset': [0, -0.8] }, paint: { 'text-color': '#8b93a1' } });
@@ -543,7 +532,8 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
         type: 'symbol',
         source: 'rings',
         filter: ['has', 'home'],
-        layout: { 'icon-image': 'receiver', 'icon-size': 0.75, 'icon-anchor': 'bottom', 'icon-allow-overlap': true, 'text-field': ['step', ['zoom'], '', 9, 'Receiver'], 'text-font': ['Noto Sans Regular'], 'text-size': 10, 'text-offset': [0, 0.3], 'text-anchor': 'top', 'text-optional': true },
+        // Hidden for now: the antenna icon doesn't read well and there's no replacement yet. Flip SHOW_RECEIVER to bring it back.
+        layout: { visibility: SHOW_RECEIVER ? 'visible' : 'none', 'icon-image': 'receiver', 'icon-size': 0.75, 'icon-anchor': 'bottom', 'icon-allow-overlap': true, 'text-field': ['step', ['zoom'], '', 9, 'Receiver'], 'text-font': ['Noto Sans Regular'], 'text-size': 10, 'text-offset': [0, 0.3], 'text-anchor': 'top', 'text-optional': true },
         paint: { 'text-color': '#4ade80', 'text-halo-color': '#0b0e13', 'text-halo-width': 1.2 },
       });
       (['nav-port', 'nav-stbd', 'nav-light', 'nav-other', 'nav-station'] as const).forEach((k) => m.addImage(k, navImage(k), { pixelRatio: 1.5 }));
@@ -694,8 +684,6 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
     });
     return () => {
       cancelAnimationFrame(pulse);
-      attribObserver.disconnect();
-      attrib?.removeEventListener('click', onAttribClick, true);
       m.remove();
     };
   }, []);
@@ -911,6 +899,13 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
       m.fitBounds([[w, s], [e, n]], { padding: 24, duration: 600 }, HOME_MOVE);
     } else m.easeTo({ ...homeView(), duration: 600 }, HOME_MOVE);
   };
+  // Button zooms count as moving off the starting view, like a scroll or pinch does.
+  const zoomBy = (dir: 1 | -1) => {
+    const m = map.current;
+    if (!m) return;
+    if (dir > 0) m.zoomIn({ duration: 300 }, { focus: true });
+    else m.zoomOut({ duration: 300 }, { focus: true });
+  };
   useEffect(() => {
     const m = map.current;
     if (!ready || !m) return;
@@ -953,33 +948,35 @@ export const MapView = memo(function MapView({ snapshot }: { snapshot?: Snapshot
           </button>
         ))}
       </div>
-      {layer !== 'traffic' && ((layer === 'live' && adsb?.error) || offHome) && (
-        <div className="overlay-tr">
-          {layer === 'live' && adsb?.error && (
-            <span className="tog" style={{ color: 'var(--wx)' }}>
-              Receiver unreachable{adsb.lastHeard ? ` · last heard ${ago(adsb.lastHeard, now)}` : ''}
-            </span>
-          )}
-          {offHome && (
-            <button type="button" className="tog recenter" onClick={recenter} title={layer === 'weather' ? 'Back to the radar area' : 'Back to the starting view'}>
-              <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="4" fill="none" stroke="currentColor" strokeWidth="1.4" /><circle cx="7" cy="7" r="1.4" fill="currentColor" /><path d="M7 .8v2.2M7 11v2.2M.8 7h2.2M11 7h2.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
-              Re-center
-            </button>
-          )}
+      {layer === 'live' && adsb?.error && (
+        <div className="overlay-warn">
+          <span className="tog" style={{ color: 'var(--wx)' }}>
+            Receiver unreachable{adsb.lastHeard ? ` · last heard ${ago(adsb.lastHeard, now)}` : ''}
+          </span>
         </div>
       )}
-      {layer === 'live' && (
-        <>
-          <div className="overlay-b">
-            <div className="tog" style={{ gap: 16 }}>
-              <span><b className="mono">{snapshot ? snapshot.aircraft.length : '—'}</b> <span className="muted">aircraft</span></span>
-              <span><b className="mono">{snapshot?.stats.avgRssi?.toFixed(0) ?? '—'}</b> <span className="muted">dBFS</span></span>
-            </div>
-            <button type="button" className="tog" aria-pressed={trails} onClick={() => setTrails((v) => !v)} style={{ fontSize: 11 }}>
-              {trails ? 'Trails: last 24 h' : 'Trails off'}
-            </button>
-          </div>
-        </>
+      {layer !== 'traffic' && (
+        <div className="overlay-b">
+          {/* Zoom always; Re-center joins the group once the view has moved off the starting view. */}
+          <span className="tog map-view" role="group" aria-label="Map view">
+            <button type="button" className="zoom-btn" aria-label="Zoom out" onClick={() => zoomBy(-1)}>−</button>
+            <button type="button" className="zoom-btn" aria-label="Zoom in" onClick={() => zoomBy(1)}>+</button>
+            {offHome && (
+              <button type="button" className="zoom-btn recenter" onClick={recenter} title={layer === 'weather' ? 'Back to the radar area' : 'Back to the starting view'}>
+                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="4" fill="none" stroke="currentColor" strokeWidth="1.4" /><circle cx="7" cy="7" r="1.4" fill="currentColor" /><path d="M7 .8v2.2M7 11v2.2M.8 7h2.2M11 7h2.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+                Re-center
+              </button>
+            )}
+          </span>
+        </div>
+      )}
+      {layer !== 'traffic' && (
+        // Map credits (required by OpenStreetMap's licence): faint, always there, in the map's bottom-right corner.
+        <span className="map-credits">
+          <a href="https://openfreemap.org" target="_blank" rel="noreferrer">OpenFreeMap</a>
+          <a href="https://www.openmaptiles.org/" target="_blank" rel="noreferrer">© OpenMapTiles</a>
+          <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap</a>
+        </span>
       )}
       {layer === 'traffic' &&
         (overlays.traffic ? (
