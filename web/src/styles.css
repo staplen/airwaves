@@ -28,6 +28,10 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 button { font: inherit; }
+/* With viewport-fit=cover the page runs under the status bar / notch. A solid strip the colour of the page keeps the
+   clock legible over scrolled content (instead of iOS's blur); it is 0 px tall where there is no inset. */
+body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; height: env(safe-area-inset-top); background: var(--ground); z-index: 1000; pointer-events: none; }
+.page { padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
 
 /* The whole window: the map stage on top (feed and dial float over it), the scanner footer below. */
 .page { height: 100vh; height: 100dvh; display: grid; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; }
@@ -139,7 +143,8 @@ button.tog[aria-pressed='false'] { color: var(--muted); }
   .feedfloat { position: static; width: auto; padding: 12px; pointer-events: auto; }
   .feedfloat > .feed { height: auto; }
   .feedfloat .feed-list { overflow: visible; padding-right: 0; -webkit-mask-image: none; mask-image: none; }
-  .dialpop { position: static; padding: 0 12px; max-height: none; }
+  /* The dial doesn't fit a phone; there ^ opens the footer's other bands instead. */
+  .dialpop { display: none; }
   .freq { font-size: 26px; }
 }
 
@@ -178,7 +183,7 @@ button.tog[aria-pressed='false'] { color: var(--muted); }
 .about { max-width: 560px; width: calc(100% - 32px); padding: 0; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--card); color: var(--text); }
 .about::backdrop { background: #0009; }
 .about-body { padding: 24px; display: flex; flex-direction: column; gap: 12px; font-size: 14px; line-height: 1.55; }
-.about-body h2 { margin: 0; font-size: 20px; }
+.about-body h2 { margin: 0; font-size: 20px; outline: none; }
 .about-body p, .about-body ul { margin: 0; }
 .about-body ul { padding-left: 18px; display: flex; flex-direction: column; gap: 4px; color: var(--text-2); }
 .about-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 4px; }
@@ -313,8 +318,9 @@ button.sc-s { cursor: pointer; }
   .scanner { position: sticky; bottom: 0; z-index: 10; display: flex; flex-wrap: wrap; gap: 8px 10px; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
   .sc-onair { order: -2; flex: 1 1 calc(100% - 52px); }
   .sc-end { order: -1; flex-direction: column; }
-  /* Every family, heard or coming up, wraps into rows under the card. */
+  /* Every family, heard or coming up, wraps into rows under the card, but only once ^ opens the footer. */
   .sc-side { display: contents; }
+  .scanner:not(.open) .sc-side { display: none; }
   .sc-fam { flex: 1 0 84px !important; }
   .sc-fam.past { opacity: .75; }
 }

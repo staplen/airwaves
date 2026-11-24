@@ -21,7 +21,8 @@ interface FamilyBand {
 /**
  * The footer: the family on air opened into a card in the middle (frequency, countdown, each of its slots), the
  * families heard most recently to its left and the ones coming up to its right, each a bar textured with its last
- * 24 hours of spectrum activity. Bars and slots filter the feed.
+ * 24 hours of spectrum activity. Bars and slots filter the feed. On phones the other families stay folded away
+ * until the ^ button opens them (it opens the dial on wider screens).
  */
 export function Scanner({ snapshot, connected, status, dialOpen, onToggleDial, end }: {
   snapshot?: Snapshot;
@@ -109,7 +110,7 @@ export function Scanner({ snapshot, connected, status, dialOpen, onToggleDial, e
   };
 
   return (
-    <footer className="scanner" aria-label="Receiver: what each family of signals has heard today">
+    <footer className={`scanner${dialOpen ? ' open' : ''}`} aria-label="Receiver: what each family of signals has heard today">
       <div className="sc-side sc-past">{past.map((b) => bar(b, 'past'))}</div>
 
       <section className={`sc-onair${switching ? ' switching-out' : ''}`} style={{ ['--c' as string]: onColor }} aria-label="What the radio is listening to now">
@@ -179,7 +180,7 @@ export function Scanner({ snapshot, connected, status, dialOpen, onToggleDial, e
       <div className="sc-side sc-next">{next.map((b) => bar(b, 'next'))}</div>
 
       <div className="sc-end">
-        <button type="button" className="strip-toggle" aria-expanded={dialOpen} aria-label={dialOpen ? 'Hide receiver dial and spectrum' : 'Show receiver dial and spectrum'} title="Receiver dial and spectrum" onClick={onToggleDial}>
+        <button type="button" className="strip-toggle" aria-expanded={dialOpen} aria-label={dialOpen ? 'Hide receiver dial and other bands' : 'Show receiver dial and other bands'} title="Receiver dial and other bands" onClick={onToggleDial}>
           <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" style={{ transform: dialOpen ? 'rotate(180deg)' : undefined }}>
             <path d="M3 9 L7 5 L11 9" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
           </svg>

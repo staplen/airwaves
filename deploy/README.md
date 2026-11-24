@@ -14,13 +14,14 @@ Home Assistant OS path mapping (the SSH session runs in its own container):
    `username: airwaves` with a password. Save and restart the add-on.
 2. **Code.** `git clone https://github.com/staplen/airwaves.git /share/airwaves/app`
    (install git first with `apk add git` if the SSH add-on lacks it).
-3. **Folders and settings.**
-   `mkdir -p /share/airwaves/data /share/airwaves/spectrum /share/airwaves/readsb /share/airwaves/hdradio/aas /share/airwaves/sonde/log /media/airwaves/atc /media/airwaves/noaa`
+3. **Settings.**
    `cp /share/airwaves/app/deploy/airwaves.env.example /share/airwaves/airwaves.env` and fill in
    `MQTT_PASS`, `HOME_LAT`/`HOME_LON` (receiver location, used only on the Pi) and `HD_STATIONS`.
-   `cp /share/airwaves/app/deploy/sonde/station.cfg /share/airwaves/sonde/station.cfg` (uploads disabled).
-4. **Build** the dashboard and local decoder images: `sh /share/airwaves/app/deploy/update.sh`
-   (the first run of the HD Radio image compiles nrsc5 and takes several minutes on a Pi 4).
+   Optionally set `PUBLIC_HOME_LAT`/`PUBLIC_HOME_LON` (where the public site draws the receiver) and `GAS_METER_ID`.
+4. **Build** the dashboard and local decoder images: `sh /share/airwaves/app/deploy/update.sh`.
+   It also creates the data and audio folders under `/share/airwaves` and `/media/airwaves`, and copies
+   `deploy/sonde/station.cfg` (uploads disabled) into place. The first run of the HD Radio image
+   compiles nrsc5 and takes several minutes on a Pi 4.
 5. **Collector + dashboard** on port 8090:
 
    ```bash
@@ -53,7 +54,7 @@ scheduler. (`deploy/bundle.sh` still makes a tarball if you ever need to update 
 reads those files and falls back to Ultrafeeder's port 8080 if they're missing. Ultrafeeder is the
 "standby" container: the scheduler stops it at start and starts it again when the scheduler stops.
 
-Storage stays bounded: the collector deletes ATC and NOAA audio after 24 hours, folds
+Storage stays bounded: the collector deletes audio clips (ATC, NOAA, rail radio, HD Radio) after 24 hours, folds
 each spectrum sweep into the database and deletes the CSV, and keeps 7 days of feed,
 daily counts and spectrum in SQLite; HD Radio album art is also deleted after 24 hours.
 
@@ -75,7 +76,9 @@ connection to the web host and, every `PUBLISH_EVERY_SEC` (60 s), uploads a read
   ago" if the copy stops updating.
 - **Media:** clips, album art and map tiles referenced by the data are uploaded to `clips/`, `art/`
   and `maps/`. Remote files older than 24 hours are deleted every 10 minutes.
-- **Always the public view:** no home location and no distances, whatever the local dashboard shows.
+- **Always the public view:** no distances and never the real home location, whatever the local dashboard
+  shows. The receiver is drawn at `PUBLIC_HOME_LAT`/`PUBLIC_HOME_LON` if set, otherwise at the real location
+  snapped to a ~5 km grid and moved by a fixed secret offset.
 - Network errors are logged and retried with backoff (5 s up to 5 min); the collector keeps running.
 
 **IONOS setup:** create the folder (e.g. `airwaves`) in the web space of nicostaple.com, give it an
