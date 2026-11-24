@@ -6,12 +6,13 @@ import { LocateButton } from './Locate.tsx';
 // what came lowest and closest around the moment of the tap. Live dashboard only (it changes what
 // the radio listens to, so the public copy never shows it).
 
-const POLL_MS = 1000;
+const POLL_MS = 700;
 const KEEP_POLLING_MS = 60_000; // keep refining while the card is open, then settle
 const DONE = new Set<WwtAnswer['status']>(['answer', 'nothing', 'no-radio']);
 
 const STATUS: Record<WwtAnswer['status'], string> = {
   tuning: 'Tuning to aircraft',
+  early: 'Something close',
   listening: 'Listening',
   answer: 'Best match',
   nothing: 'Nothing close',
@@ -76,7 +77,7 @@ export function WhatWasThat() {
             </span>
             <button type="button" className="wwt-x" aria-label="Close" onClick={close}>×</button>
           </div>
-          <p className="wwt-say">{error ?? answer?.say ?? 'Asking…'}</p>
+          <p className="wwt-say">{error ?? answer?.sayLong ?? answer?.say ?? 'Asking…'}</p>
           {answer?.status === 'answer' && best && (
             <div className="wwt-best">
               <span className="muted mono">{[best.flight, best.reg, best.hex.toUpperCase()].filter(Boolean).join(' · ')}</span>

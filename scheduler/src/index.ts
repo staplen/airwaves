@@ -123,19 +123,21 @@ if (env.MQTT_URL) {
 }
 
 // ---- interrupts ------------------------------------------------------------------------------------
-/** A pending request to put one slot on the air now, until `until`. */
-let interrupt: { slotId: string; until: number } | undefined;
+/** A pending request to put one slot on the air now, until `until`. `at` is when it was asked (for timing logs). */
+let interrupt: { slotId: string; until: number; at: number } | undefined;
+let tapAt = 0; // the latest request's time, so the log can say how long each step took after it
+const sinceTap = () => `+${((Date.now() - tapAt) / 1000).toFixed(1)}s after the tap`;
 let wake: (() => void) | undefined; // cuts the current slot's wait short
 
 /** Parses an interrupt request; ignores stale or unknown ones (e.g. replayed after a broker restart). */
-export function parseInterrupt(text: string, now: number, slotIds: string[]): { slotId: string; until: number } | undefined {
+export function parseInterrupt(text: string, now: number, slotIds: string[]): { slotId: string; until: number; at: number } | undefined {
   try {
     const m = JSON.parse(text) as { slotId?: unknown; minutes?: unknown; at?: unknown };
     const slotId = typeof m.slotId === 'string' ? m.slotId : 'adsb';
     const at = typeof m.at === 'number' ? m.at : now;
     if (!slotIds.includes(slotId) || now - at > 30_000) return undefined;
     const minutes = Math.min(INTERRUPT_MAX_MIN, Math.max(0.5, typeof m.minutes === 'number' ? m.minutes : 3));
-    return { slotId, until: now + minutes * 60_000 * TIME_SCALE };
+    return { slotId, until: now + minutes * 60_000 * TIME_SCALE, at };
   } catch {
     return undefined;
   }
@@ -145,8 +147,9 @@ function onInterrupt(text: string) {
   const req = parseInterrupt(text, Date.now(), allSlots.map((s) => s.id));
   if (!req) return;
   // A second tap while one is pending or running only stretches it.
-  interrupt = { slotId: req.slotId, until: Math.max(req.until, interrupt?.slotId === req.slotId ? interrupt.until : 0) };
-  log(`⚡ interrupt: ${req.slotId} until ${new Date(interrupt.until).toISOString().slice(11, 19)}`);
+  interrupt = { slotId: req.slotId, until: Math.max(req.until, interrupt?.slotId === req.slotId ? interrupt.until : 0), at: req.at };
+  tapAt = req.at;
+  log(`⚡ interrupt: ${req.slotId} until ${new Date(interrupt.until).toISOString().slice(11, 19)} (${sinceTap()})`);
   wake?.();
 }
 
@@ -255,14 +258,17 @@ async function startSlot(s: Slot) {
   await docker.start(name);
 }
 
-async function stopSlot(s: Slot) {
+/** Stops a slot's decoder. `fast` (cut short for an interrupt) kills it at once instead of asking it to exit. */
+async function stopSlot(s: Slot, fast = false) {
   if (DRY_RUN) return log(`[dry run] stop ${s.id}`);
-  if (s.existing) return docker.stop(s.existing, 10);
+  if (s.existing) return docker.stop(s.existing, fast ? 0 : 10);
   const name = containerName(s);
   // Keep the decoder's last words before the container goes (slots that hear nothing exit cleanly and leave no failure).
   const out = await docker.logs(name, 15).catch(() => '');
   if (out) slotLogs[s.id] = { at: Date.now(), lines: out.split('\n').map((l) => l.replace(/[\x00-\x08\x0e-\x1f]/g, '').slice(0, 200)).filter(Boolean).slice(-15) };
-  await docker.stop(name, 3); // every decoder exits within a second or two of SIGTERM; don't idle the dongle longer
+  // Every decoder exits within a second or two of SIGTERM; don't idle the dongle longer. When cut short for an
+  // interrupt, the forced remove alone kills it straight away (a half-recorded clip may be lost; that's the trade).
+  if (!fast) await docker.stop(name, 3);
   await docker.remove(name); // the dongle is free only once the container is gone
   await docker.waitGone(name);
 }
@@ -308,16 +314,20 @@ async function runSlot(loop: Slot[], i: number) {
   const since = Date.now();
   let endsAt = since + s.minutes * 60_000 * TIME_SCALE;
   let extra = 0;
+  let cut = false; // ended early for an interrupt
   current = s;
   lastRunAt.set(s, since);
   try {
     await startSlot(s);
-    log(`▶ ${s.id} (${s.freqMhz} MHz) for ${s.minutes} min`);
+    log(`▶ ${s.id} (${s.freqMhz} MHz) for ${Math.round(s.minutes * 10) / 10} min${interrupt?.slotId === s.id ? ` (${sinceTap()})` : ''}`);
     publish(loop, i, since, endsAt);
     let lastBeat = Date.now();
     while (!stopping) {
       if (interrupt) {
-        if (interrupt.slotId !== s.id) break; // another slot is wanted now: end this one early
+        if (interrupt.slotId !== s.id) {
+          cut = true; // another slot is wanted now: end this one early
+          break;
+        }
         // This slot is the one wanted (already on, or started for the interrupt): stay on until it's done.
         if (interrupt.until > endsAt) {
           endsAt = interrupt.until;
@@ -340,7 +350,10 @@ async function runSlot(loop: Slot[], i: number) {
       }
       await nap(Math.min(left, HEALTH_EVERY_MS));
       const req = pendingInterrupt(); // (a function call: TypeScript can't see the MQTT handler set it during the nap)
-      if (req && req.slotId !== s.id) break;
+      if (req && req.slotId !== s.id) {
+        cut = true;
+        break;
+      }
       if (!(await healthy(s))) break; // decoder died: move on rather than sit on a dead slot
       if (Date.now() - lastBeat > 30_000) {
         publish(loop, i, since, endsAt);
@@ -351,7 +364,8 @@ async function runSlot(loop: Slot[], i: number) {
     fail(s, e instanceof Error ? e.message : String(e));
     await sleep(3000);
   } finally {
-    await stopSlot(s).catch((e) => log(`stop ${s.id} failed:`, e.message));
+    await stopSlot(s, cut).catch((e) => log(`stop ${s.id} failed:`, e.message));
+    if (cut) log(`■ ${s.id} cut short (${sinceTap()})`);
     current = undefined;
   }
 }

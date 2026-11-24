@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Aircraft } from '../../shared/types.ts';
-import { describe, rangeFromRssi, rankCandidates } from '../src/wwt.ts';
+import { describe, rangeFromRssi, rankCandidates, shortModel, shortOwner, speak } from '../src/wwt.ts';
 
 const home = { lat: 40, lon: -75 }; // a made-up spot, not the receiver
 const NM_LAT = 1 / 60; // degrees of latitude per nautical mile
@@ -58,4 +58,29 @@ test('skips aircraft on the ground and stale fixes; flags far ones as not close'
 test('describes the best match in one sentence', () => {
   const [c] = rankCandidates([plane({ hex: 'aaa', category: 'A7', altBaro: 900, lat: home.lat + 0.6 * NM_LAT, lon: home.lon, typeDesc: 'Sikorsky UH-60 Black Hawk', owner: 'US Army', track: 135, gs: 0 })], home, now, now);
   assert.equal(describe(c), 'Probably a helicopter: Sikorsky UH-60 Black Hawk, US Army. 900 feet, 0.7 miles north, heading southeast.');
+});
+
+test('short owner and model names for speech', () => {
+  assert.equal(shortOwner('United States Army'), 'Army');
+  assert.equal(shortOwner('United States Marine Corps'), 'Marines');
+  assert.equal(shortOwner('American Airlines Inc'), 'American');
+  assert.equal(shortOwner('Delta Air Lines Inc'), 'Delta');
+  assert.equal(shortOwner('Wells Fargo Trust Co Na Trustee'), undefined);
+  assert.equal(shortModel('Sikorsky UH-60 Black Hawk'), 'Black Hawk');
+  assert.equal(shortModel('Airbus A-321'), 'A321');
+  assert.equal(shortModel('Boeing 737-800'), 'Boeing 737');
+  assert.equal(shortModel('Boeing 777-300ER'), 'Boeing 777');
+  assert.equal(shortModel('Bell 407'), 'Bell 407');
+});
+
+test('the spoken answer is short', () => {
+  const [heli] = rankCandidates([plane({ hex: 'aaa', category: 'A7', military: true, altBaro: 900, lat: home.lat + 0.5 * NM_LAT, lon: home.lon, typeDesc: 'Sikorsky UH-60 Black Hawk', owner: 'United States Army', flight: 'PAT21', track: 135, gs: 0 })], home, now, now);
+  assert.equal(speak(heli), 'Army Black Hawk helicopter, under 1,000 feet, just north.');
+  assert.equal(speak(heli, true), 'Maybe an Army Black Hawk helicopter, under 1,000 feet, just north.');
+  const [jet] = rankCandidates([plane({ hex: 'bbb', category: 'A3', altBaro: 3100, lat: home.lat, lon: home.lon + 1 / (60 * Math.cos((home.lat * Math.PI) / 180)), typeDesc: 'Airbus A-321', owner: 'American Airlines Inc' })], home, now, now);
+  assert.equal(speak(jet), 'American A321, about 3,000 feet, a mile east.');
+  const [unknown] = rankCandidates([plane({ hex: 'ccc', category: 'A1', altBaro: 2000, lat: home.lat, lon: home.lon })], home, now, now);
+  assert.equal(speak(unknown), 'A light plane, about 2,000 feet, overhead.');
+  const [dark] = rankCandidates([plane({ hex: 'ddd', altBaro: 1100, rssi: -4, typeDesc: 'Sikorsky UH-60 Black Hawk', owner: 'United States Army', military: true })], home, now, now);
+  assert.equal(speak(dark), 'Army Black Hawk, about 1,000 feet, no position, but close.');
 });

@@ -6,7 +6,7 @@ import { dirname, extname, join, normalize } from 'node:path';
 import { connect as mqttConnect } from 'mqtt';
 import type { Aircraft, AisFixed, Balloon, FeedItem, Home, Overlays, Pin, PinMetric, RadioStation, SchedulerState, WwtAnswer, SensorInfo, SlotStat, Snapshot, SourceStatus, SpectrumHeat, Tracks, Vessel } from '../../shared/types.ts';
 import { AdsbSource } from './adsb.ts';
-import { describe, rankCandidates } from './wwt.ts';
+import { altWords, describe, FIRM_MI, rankCandidates, speak, speakBare } from './wwt.ts';
 import { AisDecoder, shipTypeName } from './ais.ts';
 import { ClipWatcher, existingClips, type Clip } from './clips.ts';
 import { parseSame } from './eas.ts';
@@ -677,42 +677,94 @@ if (MQTT_URL) {
 // A tap asks the scheduler to put ADS-B on now (it rotates through other bands most of the time),
 // then ranks what it hears by how low and close each aircraft came around the moment of the tap.
 const WWT_HOLD_MIN = 3; // how long ADS-B stays on after a tap
-const WWT_SETTLE_MS = 5000; // a freshly started readsb needs a few seconds to fix positions
+const WWT_SETTLE_MS = 5000; // a freshly started readsb needs a few seconds to fix every position
 const WWT_LISTEN_MS = 15_000; // keep listening this long for something close before saying "nothing"
 const WWT_GIVE_UP_MS = 30_000; // the radio never came on
+const WWT_FAST_POLL_MS = 500; // read readsb's output this often while a question is open (normally every 2 s)
+const WWT_FINAL = new Set<WwtAnswer['status']>(['answer', 'nothing', 'no-radio']);
+const NO_TRANSPONDER = 'Could be something without a transponder.';
+const wwtTimes = new Map<number, { radio?: number; answered?: number }>(); // per tap, for the timing log
+let wwtFastUntil = 0;
 
 function wwtTrigger(at: number) {
   mqttClient?.publish('airwaves/scheduler/interrupt', JSON.stringify({ slotId: 'adsb', minutes: WWT_HOLD_MIN, at }));
+  wwtFastUntil = at + 90_000;
+  for (const k of wwtTimes.keys()) if (at - k > 10 * 60_000) wwtTimes.delete(k);
+  wwtTimes.set(at, {});
 }
+setInterval(() => {
+  if (Date.now() < wwtFastUntil) void adsb.poll();
+}, WWT_FAST_POLL_MS);
+
+const planes = (n: number) => `${n} ${n === 1 ? 'plane' : 'planes'}`;
 
 function wwtAnswer(at: number, now = Date.now()): WwtAnswer {
-  const base = { at, now, candidates: [], heard: 0 };
+  const t = wwtTimes.get(at);
+  const secs = (ms?: number) => (ms === undefined ? undefined : Math.round((ms - at) / 100) / 10);
+  const done = (a: Omit<WwtAnswer, 'at' | 'now' | 'timing' | 'next'>): WwtAnswer => {
+    if (t && WWT_FINAL.has(a.status) && !t.answered) {
+      t.answered = now;
+      console.log(`wwt: ${a.status} +${secs(now)}s (radio on +${secs(t.radio) ?? '?'}s): ${a.say}`);
+    }
+    return { at, now, ...a, next: WWT_FINAL.has(a.status) ? 'stop' : 'wait', timing: t ? { radioS: secs(t.radio), answerS: secs(t.answered) } : undefined };
+  };
+  const plain = (status: WwtAnswer['status'], say: string) => done({ status, say, sayLong: say, candidates: [], heard: 0 });
   const home = adsb.home;
-  // Data counts once it's from after the tap and the receiver has had a moment to settle.
+  if (!home) return plain('no-radio', "The receiver's location isn't known yet.");
+  // Data counts once it's from after the tap (or the radio was already on aircraft).
   const fresh = adsb.lastOk >= at - 3000 && now - adsb.lastOk < 10_000;
-  const readyAt = Math.max(at, adsb.okSince + WWT_SETTLE_MS);
-  if (!home) return { ...base, status: 'no-radio', say: "The receiver's location isn't known yet." };
-  if (!fresh || now < readyAt) {
-    return now - at > WWT_GIVE_UP_MS
-      ? { ...base, status: 'no-radio', say: "The aircraft radio didn't come on. Is the scheduler running?" }
-      : { ...base, status: 'tuning', say: 'Tuning to aircraft…' };
+  if (!fresh) {
+    return now - at > WWT_GIVE_UP_MS ? plain('no-radio', "The aircraft radio didn't come on. Is the scheduler running?") : plain('tuning', 'Tuning in.');
   }
+  if (t && !t.radio) t.radio = Math.max(at, adsb.okSince);
+  const readyAt = Math.max(at, adsb.okSince + WWT_SETTLE_MS); // when every nearby position should have come in
   const aircraft = snapshot().aircraft;
   const ranked = rankCandidates(aircraft, home, at, now);
   const close = ranked.filter((c) => c.close);
   const candidates = (close.length ? close : ranked).slice(0, 4);
   const heard = aircraft.length;
-  if (close.length) return { ...base, status: 'answer', say: describe(close[0]), candidates, heard };
-  if (now - readyAt < WWT_LISTEN_MS) return { ...base, status: 'listening', say: 'Listening…', candidates, heard };
-  return {
-    ...base,
+  const best = close[0];
+  // Something low and close with a position is the answer straight away; otherwise give the rest a moment to decode.
+  if (best && (now >= readyAt || (best.positioned && best.slantMi <= FIRM_MI))) {
+    const maybe = close[1] !== undefined && close[1].score - best.score < 0.5;
+    return done({ status: 'answer', say: speak(best, maybe), sayLong: describe(best), candidates, heard });
+  }
+  const onAir = heard ? `Radio's on. Hearing ${planes(heard)}.` : "Radio's on. No planes yet.";
+  if (best) {
+    const alt = altWords(best.altFt);
+    const say = best.positioned ? `So far: ${speakBare(best)}.` : `Something ${best.altFt !== undefined && best.altFt < 5000 ? 'low' : 'close'}${alt ? `, ${alt}` : ''}. Getting its position.`;
+    return done({ status: 'early', say, sayLong: say, candidates, heard });
+  }
+  if (now - readyAt < WWT_LISTEN_MS) return done({ status: 'listening', say: onAir, sayLong: onAir, candidates, heard });
+  return done({
     status: 'nothing',
-    say: ranked.length
-      ? `${describe(ranked[0])} It may have had no transponder: military helicopters and drones often don't.`
-      : 'No aircraft heard at all. It may have had no transponder: military helicopters and drones often don\'t.',
+    say: ranked[0] ? `Nothing close. Nearest: ${speakBare(ranked[0])}. ${NO_TRANSPONDER}` : `No aircraft heard. ${NO_TRANSPONDER}`,
+    sayLong: `${ranked[0] ? describe(ranked[0]) : 'No aircraft heard at all.'} It may have had no transponder: military helicopters and drones often don't.`,
     candidates,
     heard,
+  });
+}
+
+/**
+ * Answers a request once there's something worth saying: a final answer, or (with `onChange`, for a voice
+ * shortcut speaking progress) any change of status, or when `waitMs` runs out, whichever comes first.
+ */
+function wwtWait(res: ServerResponse, at: number, waitMs: number, onChange: boolean) {
+  const started = Date.now();
+  const first = wwtAnswer(at).status;
+  const json = (a: WwtAnswer) => res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(a));
+  const poll = () => {
+    const a = wwtAnswer(at);
+    const ready = WWT_FINAL.has(a.status) || (onChange && a.status !== first);
+    if (!ready && Date.now() - started < waitMs && !res.destroyed) return void setTimeout(poll, WWT_FAST_POLL_MS);
+    if (!ready && !onChange && waitMs > 0) {
+      // Out of time while waiting for a final answer: say where it got to.
+      if (a.status === 'tuning') a.say = 'Still tuning in. Ask again in a few seconds.';
+      else if (a.status === 'listening') a.say = a.candidates[0] ? `Nothing close yet. Nearest: ${speakBare(a.candidates[0])}.` : 'Radio is on, but no planes yet.';
+    }
+    json(a);
   };
+  poll();
 }
 
 function onMqtt(topic: string, text: string) {
@@ -943,28 +995,21 @@ const server = createServer((req, res) => {
     return;
   }
   if (p === '/api/wwt') {
-    // "What was that?": POST starts one (and can wait for the answer, for voice shortcuts); GET checks on it. LAN only.
+    // "What was that?" LAN only.
+    //   POST                      start one; replies at once (status "tuning" unless the radio is already on aircraft)
+    //   POST ?wait=N              start one and wait up to N s (max 25) for the final answer
+    //   GET  ?at=<at>             check on one
+    //   GET  ?at=<at>&wait=N      wait up to N s for its status to change (for a voice shortcut speaking progress)
     if (isPublic(req)) return void res.writeHead(403).end();
-    const json = (a: WwtAnswer) => res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(a));
+    const waitMs = Math.min(25, Math.max(0, Number(url.searchParams.get('wait')) || 0)) * 1000;
     if (req.method === 'POST') {
       const at = Date.now();
       wwtTrigger(at);
-      const waitMs = Math.min(25, Math.max(0, Number(url.searchParams.get('wait')) || 0)) * 1000;
-      if (!waitMs) return void json(wwtAnswer(at));
-      const poll = () => {
-        const a = wwtAnswer(at);
-        if (a.status === 'tuning' || a.status === 'listening') {
-          if (Date.now() - at < waitMs && !res.destroyed) return void setTimeout(poll, 1000);
-          if (a.status === 'tuning') a.say = 'Still tuning to aircraft. Ask again in a few seconds.';
-          else if (a.candidates[0]) a.say = `Nothing close yet. Nearest so far: ${describe(a.candidates[0], false)}`;
-        }
-        json(a);
-      };
-      return void poll();
+      return void wwtWait(res, at, waitMs, false);
     }
     const at = Number(url.searchParams.get('at'));
     if (!Number.isFinite(at) || at <= 0) return void res.writeHead(400).end();
-    return void json(wwtAnswer(at));
+    return void wwtWait(res, at, waitMs, true);
   }
   if (p === '/api/health') {
     res.writeHead(200, { 'content-type': 'application/json' });

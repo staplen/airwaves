@@ -251,8 +251,13 @@ export interface WwtCandidate {
 export interface WwtAnswer {
   at: number; // when you tapped
   now: number;
-  status: 'tuning' | 'listening' | 'answer' | 'nothing' | 'no-radio';
-  say: string; // one sentence for the card or a voice assistant
+  // tuning: radio not on aircraft yet · early: something close heard, still pinning it down · listening: on, nothing close yet.
+  // answer, nothing and no-radio are final.
+  status: 'tuning' | 'early' | 'listening' | 'answer' | 'nothing' | 'no-radio';
+  say: string; // short, for a voice assistant (about three seconds); progress lines while not final
+  sayLong: string; // the full sentence, for the card
+  next: 'stop' | 'wait'; // stop: final (answer, nothing, no-radio); wait: ask again (GET ?at=…&wait=N)
+  timing?: { radioS?: number; answerS?: number }; // seconds after the tap: radio on aircraft, final answer
   candidates: WwtCandidate[]; // best first, at most 4
   heard: number; // aircraft on the air when answered
 }

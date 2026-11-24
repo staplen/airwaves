@@ -16,6 +16,7 @@ const FT_PER_NM = 6076;
 const MI_PER_NM = 1.15078;
 const ALT_PENALTY_FT_PER_NM = 5000; // every 5,000 ft of height counts like another nautical mile away
 export const CLOSE_NM = 6; // beyond this (slant) it's unlikely to be what you saw or heard
+export const FIRM_MI = 2.3; // (2 nm) this close with a position: answer straight away, without waiting for the rest to decode
 
 const KINDS: Record<string, string> = {
   A1: 'light plane',
@@ -143,4 +144,85 @@ export function describe(c: WwtCandidate, lead = true): string {
   ].filter(Boolean);
   const head = lead ? `${c.close ? 'Probably' : 'Nothing close. Nearest is'} ${/^[aeiou]/.test(c.kind) ? 'an' : 'a'} ${c.kind}` : c.kind;
   return `${head}${what.length ? `: ${what.join(', ')}` : ''}. ${where.join(', ')}.`.replace(/^./, (x) => x.toUpperCase());
+}
+
+// ---- short spoken form ------------------------------------------------------------------------------
+// For a voice assistant: about three seconds, e.g. "Army Black Hawk helicopter, under 1,000 feet, just north."
+
+const BRANCHES: [RegExp, string][] = [
+  [/\barmy\b/i, 'Army'],
+  [/\bnavy\b/i, 'Navy'],
+  [/\bair force\b/i, 'Air Force'],
+  [/\bmarine/i, 'Marines'],
+  [/\bcoast guard\b/i, 'Coast Guard'],
+  [/\bnational guard\b/i, 'National Guard'],
+];
+
+/** "United States Army" → "Army", "American Airlines Inc" → "American"; long private owners (trusts, banks, leasing) → nothing. */
+export function shortOwner(owner: string | undefined): string | undefined {
+  if (!owner) return undefined;
+  if (/\b(united states|u\.?s\.?a?|us)\b/i.test(owner) || /\bguard\b/i.test(owner)) {
+    for (const [re, name] of BRANCHES) if (re.test(owner)) return name;
+  }
+  if (/\b(trust|trustee|bank|leasing|holdings|capital|services)\b/i.test(owner)) return undefined;
+  let o = owner.replace(/[.,]/g, '').trim();
+  for (let k = 0; k < 3; k++) o = o.replace(/\s+(inc|llc|corp|corporation|co|ltd|lp|company|na)$/i, '');
+  o = o.replace(/\s+(air ?lines|airways)$/i, '');
+  return o && o.split(/\s+/).length <= 3 ? o : undefined;
+}
+
+/** "Sikorsky UH-60 Black Hawk" → "Black Hawk", "Airbus A-321" → "A321", "Boeing 737-800" → "Boeing 737". */
+export function shortModel(typeDesc: string | undefined): string | undefined {
+  if (!typeDesc) return undefined;
+  const words = typeDesc.trim().split(/\s+/);
+  const i = words.findIndex((w) => /\d/.test(w));
+  if (i < 0) return words.length > 1 ? words.slice(1).join(' ') : words[0];
+  const tail = words.slice(i + 1);
+  if (tail.length && tail.every((w) => /^[A-Za-z]+$/.test(w)) && !/^(ER|LR|XWB|MAX|NEO|II|III|IV)$/i.test(tail[0])) return tail.join(' ');
+  const model = words[i].replace(/^(\d+)-\d+.*$/, '$1').replace(/^([A-Z])-(\d)/, '$1$2');
+  return /^\d/.test(model) && i > 0 ? `${words.slice(0, i).join(' ')} ${model}` : model;
+}
+
+const SAY_KIND = new Set(['helicopter', 'light plane', 'small plane', 'glider', 'balloon', 'ultralight', 'drone']);
+const article = (s: string) => (/^[aeiou]/i.test(s) ? 'an' : 'a');
+
+export function altWords(ft: number | undefined): string | undefined {
+  if (ft === undefined) return undefined;
+  if (ft < 1000) return 'under 1,000 feet';
+  if (ft < 18_000) return `about ${(Math.round(ft / 500) * 500).toLocaleString('en-US')} feet`;
+  return `${(Math.round(ft / 1000) * 1000).toLocaleString('en-US')} feet`;
+}
+
+function whereWords(c: WwtCandidate): string {
+  if (!c.positioned) return c.close ? 'no position, but close' : 'no position';
+  const d = c.groundMi ?? 0;
+  const dir = dirWord(c.bearing) ?? '';
+  if (d < 0.3 || !dir) return 'overhead';
+  if (d < 0.7) return `just ${dir}`;
+  if (d < 1.5) return `a mile ${dir}`;
+  return `${Math.round(d)} miles ${dir}`;
+}
+
+/** What it is, briefly: "Army Black Hawk helicopter", "American A321", "small plane". */
+export function shortName(c: WwtCandidate): string {
+  const owner = shortOwner(c.owner);
+  const name = [owner, shortModel(c.typeDesc)].filter(Boolean).join(' ');
+  // "military" is implied by a named service; airliner and jet go without saying once there's a model.
+  const kind = BRANCHES.some(([, b]) => b === owner) ? c.kind.replace(/^military /, '') : c.kind;
+  if (!name) return kind === 'aircraft' ? 'an aircraft' : `${article(kind)} ${kind}`;
+  return SAY_KIND.has(kind.replace(/^military /, '')) ? `${name} ${kind}` : name;
+}
+
+/** The clauses of the short form, without a lead-in or full stop. */
+export function speakBare(c: WwtCandidate): string {
+  return [shortName(c), altWords(c.altFt), whereWords(c)].filter(Boolean).join(', ');
+}
+
+const cap = (s: string) => s.replace(/^./, (x) => x.toUpperCase());
+
+/** The short spoken answer. `maybe` when another close aircraft scores nearly as well. */
+export function speak(c: WwtCandidate, maybe = false): string {
+  const bare = speakBare(c);
+  if (!maybe) return `${cap(bare)}.`;
+  return /^(a|an) /.test(bare) ? `Maybe ${bare}.` : `Maybe ${article(bare)} ${bare}.`;
 }
