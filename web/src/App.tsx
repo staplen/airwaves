@@ -5,6 +5,7 @@ import { Feed } from './components/Feed.tsx';
 import { MapView } from './components/MapView.tsx';
 import { Scanner } from './components/Scanner.tsx';
 import { SensorPins } from './components/SensorPins.tsx';
+import { WhatWasThat } from './components/WhatWasThat.tsx';
 import { isStatic } from './api.ts';
 import { ago, predictRotation, useLive } from './live.ts';
 
@@ -55,6 +56,7 @@ export function App() {
       <h1 className="sr-only">Airwaves</h1>
       <div className="stage">
         <MapView snapshot={snapshot} feed={feed} />
+        {!isStatic && <WhatWasThat />}
         <div className="feedfloat">
           <Feed items={feed} />
         </div>

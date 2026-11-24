@@ -4,8 +4,9 @@ import { createReadStream, existsSync, mkdirSync, readdirSync, statSync } from '
 import { copyFile, mkdir, readdir, readFile, unlink } from 'node:fs/promises';
 import { dirname, extname, join, normalize } from 'node:path';
 import { connect as mqttConnect } from 'mqtt';
-import type { Aircraft, AisFixed, Balloon, FeedItem, Home, Overlays, Pin, PinMetric, RadioStation, SchedulerState, SensorInfo, SlotStat, Snapshot, SourceStatus, SpectrumHeat, Tracks, Vessel } from '../../shared/types.ts';
+import type { Aircraft, AisFixed, Balloon, FeedItem, Home, Overlays, Pin, PinMetric, RadioStation, SchedulerState, WwtAnswer, SensorInfo, SlotStat, Snapshot, SourceStatus, SpectrumHeat, Tracks, Vessel } from '../../shared/types.ts';
 import { AdsbSource } from './adsb.ts';
+import { describe, rankCandidates } from './wwt.ts';
 import { AisDecoder, shipTypeName } from './ais.ts';
 import { ClipWatcher, existingClips, type Clip } from './clips.ts';
 import { parseSame } from './eas.ts';
@@ -661,14 +662,57 @@ function onEas(line: string) {
   });
 }
 
+let mqttClient: ReturnType<typeof mqttConnect> | undefined;
 if (MQTT_URL) {
-  const client = mqttConnect(MQTT_URL, { username: env.MQTT_USER, password: env.MQTT_PASS, reconnectPeriod: 5000 });
+  const client = (mqttClient = mqttConnect(MQTT_URL, { username: env.MQTT_USER, password: env.MQTT_PASS, reconnectPeriod: 5000 }));
   client.on('connect', () => {
     console.log('mqtt connected');
     client.subscribe(['airwaves/rtl_433', 'airwaves/noaa/eas', 'airwaves/scheduler/state']);
   });
   client.on('error', (e) => console.warn('mqtt:', e.message));
   client.on('message', (topic, payload) => onMqtt(topic, payload.toString()));
+}
+
+// ---- "what was that?" ---------------------------------------------------------------------------
+// A tap asks the scheduler to put ADS-B on now (it rotates through other bands most of the time),
+// then ranks what it hears by how low and close each aircraft came around the moment of the tap.
+const WWT_HOLD_MIN = 3; // how long ADS-B stays on after a tap
+const WWT_SETTLE_MS = 5000; // a freshly started readsb needs a few seconds to fix positions
+const WWT_LISTEN_MS = 15_000; // keep listening this long for something close before saying "nothing"
+const WWT_GIVE_UP_MS = 30_000; // the radio never came on
+
+function wwtTrigger(at: number) {
+  mqttClient?.publish('airwaves/scheduler/interrupt', JSON.stringify({ slotId: 'adsb', minutes: WWT_HOLD_MIN, at }));
+}
+
+function wwtAnswer(at: number, now = Date.now()): WwtAnswer {
+  const base = { at, now, candidates: [], heard: 0 };
+  const home = adsb.home;
+  // Data counts once it's from after the tap and the receiver has had a moment to settle.
+  const fresh = adsb.lastOk >= at - 3000 && now - adsb.lastOk < 10_000;
+  const readyAt = Math.max(at, adsb.okSince + WWT_SETTLE_MS);
+  if (!home) return { ...base, status: 'no-radio', say: "The receiver's location isn't known yet." };
+  if (!fresh || now < readyAt) {
+    return now - at > WWT_GIVE_UP_MS
+      ? { ...base, status: 'no-radio', say: "The aircraft radio didn't come on. Is the scheduler running?" }
+      : { ...base, status: 'tuning', say: 'Tuning to aircraft…' };
+  }
+  const aircraft = snapshot().aircraft;
+  const ranked = rankCandidates(aircraft, home, at, now);
+  const close = ranked.filter((c) => c.close);
+  const candidates = (close.length ? close : ranked).slice(0, 4);
+  const heard = aircraft.length;
+  if (close.length) return { ...base, status: 'answer', say: describe(close[0]), candidates, heard };
+  if (now - readyAt < WWT_LISTEN_MS) return { ...base, status: 'listening', say: 'Listening…', candidates, heard };
+  return {
+    ...base,
+    status: 'nothing',
+    say: ranked.length
+      ? `${describe(ranked[0])} It may have had no transponder: military helicopters and drones often don't.`
+      : 'No aircraft heard at all. It may have had no transponder: military helicopters and drones often don\'t.',
+    candidates,
+    heard,
+  };
 }
 
 function onMqtt(topic: string, text: string) {
@@ -897,6 +941,30 @@ const server = createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(source ? rawTap.get(source) : rawTap.summary(), null, 1));
     return;
+  }
+  if (p === '/api/wwt') {
+    // "What was that?": POST starts one (and can wait for the answer, for voice shortcuts); GET checks on it. LAN only.
+    if (isPublic(req)) return void res.writeHead(403).end();
+    const json = (a: WwtAnswer) => res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(a));
+    if (req.method === 'POST') {
+      const at = Date.now();
+      wwtTrigger(at);
+      const waitMs = Math.min(25, Math.max(0, Number(url.searchParams.get('wait')) || 0)) * 1000;
+      if (!waitMs) return void json(wwtAnswer(at));
+      const poll = () => {
+        const a = wwtAnswer(at);
+        if (a.status === 'tuning' || a.status === 'listening') {
+          if (Date.now() - at < waitMs && !res.destroyed) return void setTimeout(poll, 1000);
+          if (a.status === 'tuning') a.say = 'Still tuning to aircraft. Ask again in a few seconds.';
+          else if (a.candidates[0]) a.say = `Nothing close yet. Nearest so far: ${describe(a.candidates[0], false)}`;
+        }
+        json(a);
+      };
+      return void poll();
+    }
+    const at = Number(url.searchParams.get('at'));
+    if (!Number.isFinite(at) || at <= 0) return void res.writeHead(400).end();
+    return void json(wwtAnswer(at));
   }
   if (p === '/api/health') {
     res.writeHead(200, { 'content-type': 'application/json' });

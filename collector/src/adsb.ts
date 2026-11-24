@@ -14,6 +14,7 @@ export class AdsbSource {
   lastError?: string;
   private lastMessages = -1;
   lastOk = 0;
+  okSince = 0; // when the current unbroken run of successful polls began
   keepOnFailure = false;
   private baseUrl: string;
   private fileDir?: string;
@@ -54,6 +55,7 @@ export class AdsbSource {
       if (d.messages > 0 && d.messages !== this.lastMessages && this.lastMessages >= 0) this.lastHeard = Date.now();
       this.lastMessages = d.messages;
       this.lastError = undefined;
+      if (Date.now() - this.lastOk > 6000) this.okSince = Date.now(); // a new run of fresh data (e.g. the ADS-B slot just started)
       this.lastOk = Date.now();
       return true;
     } catch (e) {
@@ -71,8 +73,12 @@ function num(v: unknown): number | undefined {
 }
 
 const text = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
-/** "BOEING 737-800" → "Boeing 737-800" (the database shouts). */
-const titleCase = (s: string | undefined) => s?.toLowerCase().replace(/\b([a-z])/g, (c) => c.toUpperCase()).replace(/\b(Ii|Iii|Iv|Er|Lr|Xwb|Max|Neo)\b/g, (w) => w.toUpperCase());
+/** "BOEING 737-800" → "Boeing 737-800" (the database shouts); words with digits keep their case ("UH-60", "A-321"). */
+const titleCase = (s: string | undefined) =>
+  s
+    ?.split(' ')
+    .map((w) => (/\d/.test(w) ? w : w.toLowerCase().replace(/\b([a-z])/g, (c) => c.toUpperCase())))
+    .join(' ').replace(/\b(Ii|Iii|Iv|Er|Lr|Xwb|Max|Neo)\b/g, (w) => w.toUpperCase());
 
 export function toAircraft(a: Record<string, unknown>): Aircraft {
   const flight = text(a.flight);

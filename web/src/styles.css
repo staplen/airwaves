@@ -76,7 +76,27 @@ button.tog[aria-pressed='false'] { color: var(--muted); }
 .dialpop { position: absolute; left: 12px; bottom: 56px; right: calc(clamp(300px, 30vw, 440px) + 24px); z-index: 6; display: flex; flex-direction: column; gap: 6px; max-height: calc(100% - 108px); overflow-y: auto; }
 .dialpop > .dial { background: rgba(18, 22, 29, .95); box-shadow: 0 10px 30px #0008; }
 .dialpop .pin-open { align-self: flex-start; margin: 0; padding: 4px 10px; border-radius: 8px; background: rgba(18, 22, 29, .9); }
+/* "What was that?": bottom-right of the map, left of the feed; its answer card opens above the button. */
+.wwt { position: absolute; right: calc(clamp(300px, 30vw, 440px) + 24px); bottom: 12px; z-index: 7; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; pointer-events: none; }
+.wwt > * { pointer-events: auto; }
+.wwt-btn { color: var(--air); border-color: color-mix(in srgb, var(--air) 45%, var(--line-strong)); box-shadow: 0 6px 18px #0006; }
+.wwt-btn:hover { background: rgba(26, 31, 40, .95); }
+.wwt-card { width: min(380px, calc(100vw - 24px)); padding: 12px 14px 14px; background: var(--card); box-shadow: 0 10px 30px #0008; border-color: color-mix(in srgb, var(--air) 35%, var(--line)); }
+.wwt-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.wwt-head .lbl { display: inline-flex; align-items: center; gap: 7px; color: var(--air); }
+.wwt-heard { color: var(--muted); font-weight: 500; letter-spacing: .04em; text-transform: none; }
+.wwt-pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--air); animation: wwt-pulse 1s ease-in-out infinite; }
+@keyframes wwt-pulse { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .wwt-pulse { animation: none; } }
+.wwt-x { width: 28px; height: 28px; margin: -6px -8px -6px 0; border: none; background: none; color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; border-radius: 7px; }
+.wwt-x:hover { color: var(--text); background: var(--raised); }
+.wwt-say { margin: 8px 0 0; font-size: 17px; line-height: 1.4; font-weight: 500; text-wrap: pretty; }
+.wwt-best { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; font-size: 12px; }
+.wwt-others { list-style: none; margin: 10px 0 0; padding: 8px 0 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--text-2); }
+.wwt-others li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.wwt-again { margin-top: 12px; min-height: 32px; }
 @media (max-width: 1000px) {
+  .wwt { right: calc(clamp(280px, 38vw, 380px) + 24px); }
   .feedfloat { width: clamp(280px, 38vw, 380px); }
   .dialpop { right: 12px; }
 }
@@ -145,6 +165,9 @@ button.tog[aria-pressed='false'] { color: var(--muted); }
   .feedfloat .feed-list { overflow: visible; padding-right: 0; -webkit-mask-image: none; mask-image: none; }
   /* The dial doesn't fit a phone; there ^ opens the footer's other bands instead. */
   .dialpop { display: none; }
+  /* On a phone the button sits in the map's bottom-right corner; the answer opens as a wide card pinned above the scanner. */
+  .wwt { right: 12px; bottom: auto; top: calc(62vh - 48px); }
+  .wwt-card { position: fixed; left: 12px; right: 12px; bottom: calc(104px + env(safe-area-inset-bottom)); width: auto; max-height: calc(100dvh - 170px - env(safe-area-inset-bottom) - env(safe-area-inset-top)); overflow-y: auto; }
   .freq { font-size: 26px; }
 }
 

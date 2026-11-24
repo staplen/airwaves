@@ -225,6 +225,38 @@ export interface Totals {
   datalinkToday: number;
 }
 
+/** One possible answer to "what was that?" (see collector/src/wwt.ts). */
+export interface WwtCandidate {
+  hex: string;
+  flight?: string;
+  reg?: string;
+  typeDesc?: string;
+  owner?: string;
+  kind: string; // "helicopter", "small plane", "military airliner"…
+  military?: boolean;
+  emergency?: string;
+  positioned: boolean; // false: altitude/identity only, placed by signal strength
+  altFt?: number;
+  groundMi?: number; // at its closest to the house (positioned only)
+  slantMi: number; // straight-line distance at its closest (or the signal-strength guess)
+  bearing?: string; // where it was from the house at its closest: "NE"
+  heading?: string; // which way it's going: "SE"
+  closestAt?: number; // ms; when it was (or will be) closest
+  rssi?: number;
+  close: boolean; // near enough to be what you saw or heard
+  score: number; // lower is a better match
+}
+
+/** The state of one "what was that?" request. */
+export interface WwtAnswer {
+  at: number; // when you tapped
+  now: number;
+  status: 'tuning' | 'listening' | 'answer' | 'nothing' | 'no-radio';
+  say: string; // one sentence for the card or a voice assistant
+  candidates: WwtCandidate[]; // best first, at most 4
+  heard: number; // aircraft on the air when answered
+}
+
 export interface Snapshot {
   now: number;
   home?: Home;

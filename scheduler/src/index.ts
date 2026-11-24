@@ -13,6 +13,8 @@ import { Docker } from './docker.ts';
 //  - "windows": the slot only joins the loop during these local times (balloon launches,
 //    the NOAA weekly test).
 //  - "extendIfActive": keep the slot running a little longer while its source is busy.
+//  - Interrupt: an MQTT message on airwaves/scheduler/interrupt ("what was that?" on the dashboard)
+//    cuts the running slot short and puts ADS-B on for a few minutes, then the loop carries on.
 //  - Health: a decoder that exits early is recorded as a failure (with its last log lines)
 //    and published, so the dashboard can say "slot failed".
 
@@ -55,6 +57,8 @@ const COLLECTOR_URL = env.COLLECTOR_URL ?? 'http://127.0.0.1:8090';
 const TIMEZONE = env.TIMEZONE ?? 'America/New_York';
 const TOPIC = 'airwaves/scheduler/state';
 const RESUME_TOPIC = 'airwaves/scheduler/resume';
+const INTERRUPT_TOPIC = 'airwaves/scheduler/interrupt';
+const INTERRUPT_MAX_MIN = 10;
 
 interface Resume {
   slotId: string;
@@ -112,6 +116,53 @@ if (env.MQTT_URL) {
   mqtt = mqttConnect(env.MQTT_URL, { username: env.MQTT_USER, password: env.MQTT_PASS, reconnectPeriod: 5000 });
   mqtt.on('connect', () => console.log('mqtt connected'));
   mqtt.on('error', (e) => console.warn('mqtt:', e.message));
+  mqtt.subscribe(INTERRUPT_TOPIC);
+  mqtt.on('message', (topic, payload) => {
+    if (topic === INTERRUPT_TOPIC) onInterrupt(payload.toString());
+  });
+}
+
+// ---- interrupts ------------------------------------------------------------------------------------
+/** A pending request to put one slot on the air now, until `until`. */
+let interrupt: { slotId: string; until: number } | undefined;
+let wake: (() => void) | undefined; // cuts the current slot's wait short
+
+/** Parses an interrupt request; ignores stale or unknown ones (e.g. replayed after a broker restart). */
+export function parseInterrupt(text: string, now: number, slotIds: string[]): { slotId: string; until: number } | undefined {
+  try {
+    const m = JSON.parse(text) as { slotId?: unknown; minutes?: unknown; at?: unknown };
+    const slotId = typeof m.slotId === 'string' ? m.slotId : 'adsb';
+    const at = typeof m.at === 'number' ? m.at : now;
+    if (!slotIds.includes(slotId) || now - at > 30_000) return undefined;
+    const minutes = Math.min(INTERRUPT_MAX_MIN, Math.max(0.5, typeof m.minutes === 'number' ? m.minutes : 3));
+    return { slotId, until: now + minutes * 60_000 * TIME_SCALE };
+  } catch {
+    return undefined;
+  }
+}
+
+function onInterrupt(text: string) {
+  const req = parseInterrupt(text, Date.now(), allSlots.map((s) => s.id));
+  if (!req) return;
+  // A second tap while one is pending or running only stretches it.
+  interrupt = { slotId: req.slotId, until: Math.max(req.until, interrupt?.slotId === req.slotId ? interrupt.until : 0) };
+  log(`⚡ interrupt: ${req.slotId} until ${new Date(interrupt.until).toISOString().slice(11, 19)}`);
+  wake?.();
+}
+
+const pendingInterrupt = () => interrupt;
+
+/** Sleeps, but wakes early when an interrupt arrives. */
+function nap(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(t);
+      if (wake === done) wake = undefined;
+      resolve();
+    };
+    const t = setTimeout(done, ms);
+    wake = done;
+  });
 }
 
 const log = (...a: unknown[]) => console.log(new Date().toISOString().slice(11, 19), ...a);
@@ -265,6 +316,15 @@ async function runSlot(loop: Slot[], i: number) {
     publish(loop, i, since, endsAt);
     let lastBeat = Date.now();
     while (!stopping) {
+      if (interrupt) {
+        if (interrupt.slotId !== s.id) break; // another slot is wanted now: end this one early
+        // This slot is the one wanted (already on, or started for the interrupt): stay on until it's done.
+        if (interrupt.until > endsAt) {
+          endsAt = interrupt.until;
+          publish(loop, i, since, endsAt);
+        }
+        interrupt = undefined;
+      }
       const left = endsAt - Date.now();
       if (left <= 0) {
         // Busy at the end of the slot? Stay another minute (up to the limit).
@@ -278,7 +338,9 @@ async function runSlot(loop: Slot[], i: number) {
         }
         break;
       }
-      await sleep(Math.min(left, HEALTH_EVERY_MS));
+      await nap(Math.min(left, HEALTH_EVERY_MS));
+      const req = pendingInterrupt(); // (a function call: TypeScript can't see the MQTT handler set it during the nap)
+      if (req && req.slotId !== s.id) break;
       if (!(await healthy(s))) break; // decoder died: move on rather than sit on a dead slot
       if (Date.now() - lastBeat > 30_000) {
         publish(loop, i, since, endsAt);
@@ -294,6 +356,18 @@ async function runSlot(loop: Slot[], i: number) {
   }
 }
 
+/** Runs the requested slot right after slot `i` (as an extra entry, so the dashboard's "up next" stays right). */
+async function runInterrupt(loop: Slot[], i: number) {
+  const want = interrupt!;
+  const base = allSlots.find((s) => s.id === want.slotId && !s.windows) ?? allSlots.find((s) => s.id === want.slotId);
+  if (!base || want.until <= Date.now()) return void (interrupt = undefined);
+  const minutes = Math.max(0.5, (want.until - Date.now()) / 60_000 / TIME_SCALE);
+  const withExtra = [...loop.slice(0, i + 1), { ...base, name: `${base.name} (on demand)`, minutes }, ...loop.slice(i + 1)];
+  await runSlot(withExtra, i + 1); // runSlot clears `interrupt` once it's on
+  // Still the same request (the decoder failed to start)? Drop it, or every slot after would quit at once to retry.
+  if (pendingInterrupt() === want) interrupt = undefined;
+}
+
 async function main() {
   await clearDongle();
   log(`slots: ${allSlots.map((s) => `${s.id} ${s.minutes}m${s.windows ? ' (windowed)' : ''}`).join(' → ')}${DRY_RUN ? ' [dry run]' : ''}`);
@@ -303,7 +377,10 @@ async function main() {
   // Rebuild the loop at the start of each pass so windowed slots join and leave on time.
   for (let pass = 0; !stopping; pass++) {
     const loop = activeSlots(pass);
-    for (let i = Math.min(start, loop.length - 1); i < loop.length && !stopping; i++) await runSlot(loop, i);
+    for (let i = Math.min(start, loop.length - 1); i < loop.length && !stopping; i++) {
+      await runSlot(loop, i);
+      if (interrupt && !stopping) await runInterrupt(loop, i);
+    }
     start = 0;
   }
 }
