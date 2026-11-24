@@ -67,7 +67,10 @@ test('short owner and model names for speech', () => {
   assert.equal(shortOwner('Delta Air Lines Inc'), 'Delta');
   assert.equal(shortOwner('Wells Fargo Trust Co Na Trustee'), undefined);
   assert.equal(shortModel('Sikorsky UH-60 Black Hawk'), 'Black Hawk');
-  assert.equal(shortModel('Airbus A-321'), 'A321');
+  assert.equal(shortModel('Airbus A-321'), 'Airbus 321');
+  assert.equal(shortModel('Airbus A-319'), 'Airbus 319');
+  assert.equal(shortModel('Airbus A-350-900'), 'Airbus 350');
+  assert.equal(shortModel('Embraer E-175'), 'Embraer 175');
   assert.equal(shortModel('Boeing 737-800'), 'Boeing 737');
   assert.equal(shortModel('Boeing 777-300ER'), 'Boeing 777');
   assert.equal(shortModel('Bell 407'), 'Bell 407');
@@ -78,7 +81,7 @@ test('the spoken answer is short', () => {
   assert.equal(speak(heli), 'Army Black Hawk helicopter, under 1,000 feet, just north.');
   assert.equal(speak(heli, true), 'Maybe an Army Black Hawk helicopter, under 1,000 feet, just north.');
   const [jet] = rankCandidates([plane({ hex: 'bbb', category: 'A3', altBaro: 3100, lat: home.lat, lon: home.lon + 1 / (60 * Math.cos((home.lat * Math.PI) / 180)), typeDesc: 'Airbus A-321', owner: 'American Airlines Inc' })], home, now, now);
-  assert.equal(speak(jet), 'American A321, about 3,000 feet, a mile east.');
+  assert.equal(speak(jet), 'American Airbus 321, about 3,000 feet, a mile east.');
   const [unknown] = rankCandidates([plane({ hex: 'ccc', category: 'A1', altBaro: 2000, lat: home.lat, lon: home.lon })], home, now, now);
   assert.equal(speak(unknown), 'A light plane, about 2,000 feet, overhead.');
   const [dark] = rankCandidates([plane({ hex: 'ddd', altBaro: 1100, rssi: -4, typeDesc: 'Sikorsky UH-60 Black Hawk', owner: 'United States Army', military: true })], home, now, now);

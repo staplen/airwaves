@@ -179,8 +179,12 @@ export function shortModel(typeDesc: string | undefined): string | undefined {
   if (i < 0) return words.length > 1 ? words.slice(1).join(' ') : words[0];
   const tail = words.slice(i + 1);
   if (tail.length && tail.every((w) => /^[A-Za-z]+$/.test(w)) && !/^(ER|LR|XWB|MAX|NEO|II|III|IV)$/i.test(tail[0])) return tail.join(' ');
+  const maker = words.slice(0, i).join(' ');
+  // "Airbus A-319" → "Airbus 319": spoken the way people say it (Siri reads "A319" as "a 319"). Same for Embraer E-175.
+  const lettered = words[i].match(/^([A-Z])-?(\d{3})/);
+  if (lettered && maker && maker[0].toUpperCase() === lettered[1]) return `${maker} ${lettered[2]}`;
   const model = words[i].replace(/^(\d+)-\d+.*$/, '$1').replace(/^([A-Z])-(\d)/, '$1$2');
-  return /^\d/.test(model) && i > 0 ? `${words.slice(0, i).join(' ')} ${model}` : model;
+  return /^\d/.test(model) && i > 0 ? `${maker} ${model}` : model;
 }
 
 const SAY_KIND = new Set(['helicopter', 'light plane', 'small plane', 'glider', 'balloon', 'ultralight', 'drone']);
