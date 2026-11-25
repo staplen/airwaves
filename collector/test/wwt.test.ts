@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Aircraft } from '../../shared/types.ts';
 import { aircraftName, modelNumberWords } from '../src/aircraftNames.ts';
-import { describe, localQnh, rangeFromRssi, rankCandidates, seaLevelAltFt, shortModel, shortOwner, speak } from '../src/wwt.ts';
+import { describe, localQnh, offlineWords, rangeFromRssi, rankCandidates, receiverDown, seaLevelAltFt, shortModel, shortOwner, speak } from '../src/wwt.ts';
 
 const home = { lat: 40, lon: -75 }; // a made-up spot, not the receiver
 const NM_LAT = 1 / 60; // degrees of latitude per nautical mile
@@ -153,4 +153,29 @@ test('says height above you when the ground elevation is set', () => {
   const [sea] = rankCandidates([hawk], home, now, now); // no elevation: above sea level, corrected
   assert.equal(sea.altRef, 'msl');
   assert.equal(speak(sea), 'Army Black Hawk helicopter, about 1,000 feet, just north.');
+});
+
+test('receiver health: a hung dongle reported by any slot counts until ADS-B is heard again', () => {
+  const wedged = { at: now - 60_000, reason: 'decoder exited (code 1): <3>SDR wedged, exiting!' };
+  const base = { rotating: true, adsbLastOk: now - 3600_000, adsbLastHeard: now - 3600_000 };
+  assert.deepEqual(receiverDown({ ...base, failures: { adsb: wedged } }, now), { since: now - 3600_000, at: wedged.at, reason: wedged.reason, certain: false });
+  // Once the scheduler has called it, no need to wait for this tap's own try.
+  assert.equal(receiverDown({ ...base, sdrHung: true }, now)?.certain, true);
+  assert.ok(receiverDown({ ...base, failures: { uat: { at: now - 1000, reason: 'Message source reports error: TIMEOUT / Abnormal exit' } } }, now));
+  // Heard since the failure (replugged, reset): fine again.
+  assert.equal(receiverDown({ ...base, adsbLastHeard: now - 1000, failures: { adsb: wedged } }, now), undefined);
+  // A decoder that failed for another reason isn't the dongle.
+  assert.equal(receiverDown({ ...base, failures: { ism: { at: now - 1000, reason: 'decoder exited (code 2): bad config' } } }, now), undefined);
+});
+
+test('receiver health: without the scheduler, Ultrafeeder not answering for 30 s is offline', () => {
+  assert.ok(receiverDown({ rotating: false, adsbLastOk: now - 60_000, adsbLastError: 'fetch failed' }, now));
+  assert.equal(receiverDown({ rotating: false, adsbLastOk: now - 5000, adsbLastError: 'fetch failed' }, now), undefined);
+});
+
+test('offline words name the last time anything was heard', () => {
+  const at = Date.UTC(2026, 10, 25, 17, 28); // 12:28 PM in New York
+  assert.equal(offlineWords(at, at + 2 * 3600_000), 'The receiver is offline. Nothing heard since 12:28 PM.');
+  assert.equal(offlineWords(at, at + 30 * 3600_000), 'The receiver is offline. Nothing heard since 12:28 PM Wednesday.');
+  assert.equal(offlineWords(undefined, at), 'The receiver is offline.');
 });

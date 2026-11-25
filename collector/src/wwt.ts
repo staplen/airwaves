@@ -1,4 +1,5 @@
 import type { Aircraft, Home, WwtCandidate } from '../../shared/types.ts';
+import { isSdrDown } from '../../shared/sdr.ts';
 import { aircraftName, modelNumberWords } from './aircraftNames.ts';
 
 // "What was that?": given the aircraft on the air and the moment you looked up, rank what's most
@@ -315,4 +316,39 @@ export function speak(c: WwtCandidate, maybe = false): string {
   const bare = speakBare(c);
   if (!maybe) return `${cap(bare)}.`;
   return /^(a|an) /.test(bare) ? `Maybe ${bare}.` : `Maybe ${article(bare)} ${bare}.`;
+}
+
+// ---- receiver health ----------------------------------------------------------------------------
+export interface ReceiverHealth {
+  rotating: boolean; // the scheduler is sharing the dongle between slots
+  sdrHung?: boolean; // the scheduler has concluded the dongle is hung (and paused the loop)
+  failures?: Record<string, { at: number; reason: string }>; // scheduler's last failure per slot
+  adsbLastHeard?: number; // last new ADS-B message
+  adsbLastOk: number; // last successful read of readsb's output
+  adsbLastError?: string;
+}
+
+/**
+ * Why the receiver looks offline right now, or undefined if it looks fine. `since`: last heard; `at`: when it
+ * failed; `certain`: no need to wait for this tap's own attempt (the scheduler says so, or Ultrafeeder is down).
+ */
+export function receiverDown(h: ReceiverHealth, now: number): { since?: number; at: number; reason: string; certain: boolean } | undefined {
+  if (!h.rotating) {
+    // Ultrafeeder runs all the time: it's down if it hasn't answered for a while.
+    return h.adsbLastError && now - h.adsbLastOk > 30_000 ? { since: h.adsbLastHeard, at: h.adsbLastOk, reason: h.adsbLastError, certain: true } : undefined;
+  }
+  if (h.sdrHung) return { since: h.adsbLastHeard, at: now, reason: 'the dongle stopped sending data', certain: true };
+  // Rotating: the newest dongle failure from any slot, if nothing has come in on ADS-B since.
+  const hung = Object.values(h.failures ?? {})
+    .filter((f) => isSdrDown(f.reason))
+    .sort((a, b) => b.at - a.at)[0];
+  return hung && hung.at > (h.adsbLastHeard ?? 0) ? { since: h.adsbLastHeard, at: hung.at, reason: hung.reason, certain: false } : undefined;
+}
+
+/** "The receiver is offline. Nothing heard since 12:37 PM." (short, for a voice assistant) */
+export function offlineWords(since: number | undefined, now: number, timeZone = 'America/New_York'): string {
+  if (!since) return 'The receiver is offline.';
+  const t = new Date(since).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone });
+  const day = (ms: number) => new Date(ms).toLocaleDateString('en-CA', { timeZone });
+  return `The receiver is offline. Nothing heard since ${day(since) === day(now) ? t : `${t} ${new Date(since).toLocaleDateString('en-US', { weekday: 'long', timeZone })}`}.`;
 }

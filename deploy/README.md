@@ -62,6 +62,23 @@ daily counts and spectrum in SQLite; HD Radio album art is also deleted after 24
 To pause the rotation and go back to plain ADS-B: `docker stop airwaves-scheduler`
 (it restarts Ultrafeeder on the way out).
 
+**Hung dongle:** an RTL-SDR can stop streaming while still showing up on USB (readsb quits with
+"SDR wedged", dump978 with "TIMEOUT"; the kernel logs nothing). After two such failures with no good
+ADS-B run between them, the scheduler pauses the loop and runs only a short ADS-B check every 3 minutes
+(or right away on a "what was that?" tap); the first check where readsb keeps streaming resumes the loop.
+The dashboard says "Receiver offline", and "what was that?" answers "The receiver is offline" straight away.
+A software USB reset (de-authorizing the device) doesn't bring it back; only cutting its power does.
+
+- *Home Assistant:* the scheduler publishes a discovery config for a `binary_sensor.airwaves_sdr`
+  ("problem" class, on while hung, with `since`, `last_ok` and `resets` attributes) on the same broker.
+  If Home Assistant's MQTT integration uses that broker it appears by itself; add an automation on it
+  turning on to get a phone notification.
+- *Automatic power cycle:* the Pi 4 can only switch all four USB ports together (that would also cut the
+  Zigbee/Z-Wave stick), so this needs the dongle on its own per-port-switchable hub. Then add a `reset` to
+  `scheduler/slots.json`: a container run privileged with the host's USB bus, at most every `everyMinutes`
+  (default 10) while hung, before a check, e.g.
+  `"reset": { "image": "<image with uhubctl>", "cmd": ["uhubctl", "-l", "<hub>", "-p", "<port>", "-a", "cycle", "-d", "5"] }`.
+
 ## Public copy (nicostaple.com/airwaves)
 
 Set `PUBLISH_HOST`, `PUBLISH_USER` and `PUBLISH_PASS` in `airwaves.env` (see the commented

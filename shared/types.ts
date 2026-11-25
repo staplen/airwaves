@@ -1,4 +1,5 @@
 // Types shared by the collector API, the scheduler and the web dashboard.
+import type { SdrHealth } from './sdr.ts';
 
 export type Family = 'air' | 'sea' | 'wx' | 'home' | 'bcast' | 'rail' | 'ham';
 
@@ -152,6 +153,7 @@ export interface SchedulerState {
   loop?: { slotId: string; minutes: number; freqMhz?: number }[]; // this pass's slots in order (ids can repeat)
   index?: number; // position of the running slot in `loop`
   loopMinutes: number;
+  sdr?: SdrHealth; // is the dongle streaming? "hung" pauses the loop
   updatedAt: number;
 }
 
@@ -288,6 +290,7 @@ export interface Snapshot {
   sensors?: SensorInfo[]; // recent 315/433 MHz sensors, most-heard first (local view only)
   pinned?: PinnedStat[]; // sensor readings pinned to the top stats
   slotStats?: Record<string, SlotStat>; // header tile per slot id
+  sdr?: SdrHealth; // the dongle's health from the scheduler ("hung": it stopped streaming and the loop is paused)
 }
 
 export type PinMetric = 'temperatureF' | 'humidity';

@@ -6,7 +6,7 @@ import { dirname, extname, join, normalize } from 'node:path';
 import { connect as mqttConnect } from 'mqtt';
 import type { Aircraft, AisFixed, Balloon, FeedItem, Home, Overlays, Pin, PinMetric, RadioStation, SchedulerState, WwtAnswer, SensorInfo, SlotStat, Snapshot, SourceStatus, SpectrumHeat, Tracks, Vessel } from '../../shared/types.ts';
 import { AdsbSource } from './adsb.ts';
-import { altWords, DEFAULT_GEOID_FT, describe, FIRM_MI, rankCandidates, speak, speakBare } from './wwt.ts';
+import { altWords, DEFAULT_GEOID_FT, describe, FIRM_MI, offlineWords, rankCandidates, receiverDown, speak, speakBare } from './wwt.ts';
 import { AisDecoder, shipTypeName } from './ais.ts';
 import { ClipWatcher, existingClips, type Clip } from './clips.ts';
 import { parseSame } from './eas.ts';
@@ -174,6 +174,7 @@ function snapshot(): Snapshot {
   const aircraft = [...onAdsb, ...uat.live(now).filter((a) => !have.has(a.hex)).map((a) => ({ ...a, flight: a.flight ?? dlName(a.hex, now) }))];
   const rssis = aircraft.map((a) => a.rssi).filter((v): v is number => v !== undefined);
   const adsbExpected = !rot || scheduler?.current?.slotId === 'adsb';
+  const sdrHung = rot && scheduler?.sdr?.state === 'hung';
   return {
     now,
     home: adsb.home,
@@ -194,9 +195,11 @@ function snapshot(): Snapshot {
       running: s.id === 'adsb' || planned.has(s.id),
       lastHeard: lastHeardFor(s.id, now),
       error:
-        s.id === 'adsb' && adsb.lastError && adsbExpected && now - adsb.lastOk > 30_000
-          ? `Receiver unreachable (${adsb.lastError})`
-          : slotFailure(s.id, now),
+        s.id === 'adsb' && sdrHung
+          ? `Dongle stopped sending data${scheduler?.sdr?.since ? ` at ${clock(scheduler.sdr.since)}` : ''}: the loop is paused until it's back`
+          : s.id === 'adsb' && adsb.lastError && adsbExpected && now - adsb.lastOk > 30_000
+            ? `Receiver unreachable (${adsb.lastError})`
+            : slotFailure(s.id, now),
     })),
     aircraft,
     vessels: [...vessels.values()].filter((v) => now - v.lastSeen < 3 * 3600_000),
@@ -220,12 +223,15 @@ function snapshot(): Snapshot {
     },
     sensors: [...sensors.values()].filter((x) => now - x.lastSeen < 86_400_000).sort((a, b) => (localDay(b.lastSeen) === day ? b.heardToday : 0) - (localDay(a.lastSeen) === day ? a.heardToday : 0) || b.lastSeen - a.lastSeen).slice(0, 40),
     slotStats: slotStats(now, aircraft),
+    sdr: rot ? scheduler?.sdr : undefined,
     pinned: pins.map((p) => {
       const x = sensors.get(p.key);
       return { ...p, value: x?.[p.metric], unit: p.metric === 'temperatureF' ? '°F' : '%', lastSeen: x?.lastSeen };
     }),
   };
 }
+
+const clock = (ms: number) => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: env.TIMEZONE ?? 'America/New_York' });
 
 /** A slot failure reported by the scheduler within the last loop, as a short message. */
 function slotFailure(id: string, now: number): string | undefined {
@@ -713,12 +719,23 @@ function wwtAnswer(at: number, now = Date.now()): WwtAnswer {
     return { at, now, ...a, next: WWT_FINAL.has(a.status) ? 'stop' : 'wait', timing: t ? { radioS: secs(t.radio), answerS: secs(t.answered) } : undefined };
   };
   const plain = (status: WwtAnswer['status'], say: string) => done({ status, say, sayLong: say, candidates: [], heard: 0 });
+  const offline = (since: number | undefined, detail = 'The radio stopped sending data. Resetting or replugging the USB dongle usually fixes it.') => {
+    const say = offlineWords(since, now, env.TIMEZONE ?? 'America/New_York');
+    return done({ status: 'no-radio', say, sayLong: `${say} ${detail}`, candidates: [], heard: 0 });
+  };
   const home = adsb.home;
   if (!home) return plain('no-radio', "The receiver's location isn't known yet.");
   // Data counts once it's from after the tap (or the radio was already on aircraft).
   const fresh = adsb.lastOk >= at - 3000 && now - adsb.lastOk < 10_000;
   if (!fresh) {
-    return now - at > WWT_GIVE_UP_MS ? plain('no-radio', "The aircraft radio didn't come on. Is the scheduler running?") : plain('tuning', 'Tuning in.');
+    const down = receiverDown({ rotating: rotating(), sdrHung: scheduler?.sdr?.state === 'hung', failures: scheduler?.failures, adsbLastHeard: adsb.lastHeard, adsbLastOk: adsb.lastOk, adsbLastError: adsb.lastError }, now);
+    const ownTry = scheduler?.failures?.adsb; // the aircraft slot this tap asked for, if it has already failed
+    // The scheduler says it's hung (the tap still asks it to check again), or it failed after the tap, or time's up.
+    if (down && (down.certain || down.at >= at || now - at > WWT_GIVE_UP_MS)) return offline(down.since);
+    if (ownTry && ownTry.at >= at) return offline(adsb.lastHeard, `The aircraft radio failed to start: ${ownTry.reason}`);
+    if (now - at > WWT_GIVE_UP_MS) return plain('no-radio', "The aircraft radio didn't come on. Is the scheduler running?");
+    // It hung earlier, but this tap tries again (a replug or reset since would bring it back).
+    return plain('tuning', down ? 'The receiver looked offline earlier. Trying anyway.' : 'Tuning in.');
   }
   if (t && !t.radio) t.radio = Math.max(at, adsb.okSince);
   const readyAt = Math.max(at, adsb.okSince + WWT_SETTLE_MS); // when every nearby position should have come in

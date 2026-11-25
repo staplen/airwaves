@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { connect as mqttConnect, type MqttClient } from 'mqtt';
+import { SDR_PROOF_MS, SdrWatch } from '../../shared/sdr.ts';
 import type { SchedulerState } from '../../shared/types.ts';
 import { Docker } from './docker.ts';
 
@@ -17,6 +18,11 @@ import { Docker } from './docker.ts';
 //    cuts the running slot short and puts ADS-B on for a few minutes, then the loop carries on.
 //  - Health: a decoder that exits early is recorded as a failure (with its last log lines)
 //    and published, so the dashboard can say "slot failed".
+//  - Hung dongle: two failures that mean the dongle itself stopped (readsb's "SDR wedged", dump978's
+//    "TIMEOUT") with no proof of life between them pause the loop. While it's hung, only a short ADS-B
+//    check runs every few minutes (or right away on a "what was that?" tap), after an optional "reset"
+//    container (e.g. a USB power cycle). The first check that streams resumes the loop where it stopped.
+//    The state goes to the dashboard and to Home Assistant (an MQTT discovery "problem" sensor).
 
 interface Window {
   days?: number[]; // 0 = Sunday … 6 = Saturday; omit for every day
@@ -46,6 +52,9 @@ interface Slot {
 interface Config {
   slots: Slot[];
   standby?: string; // container that owns the dongle when the scheduler isn't running (stopped at start, started on exit)
+  // Run while the dongle is hung, before a check (at most every `everyMinutes`, default 10): e.g. a USB power
+  // cycle with uhubctl. Runs privileged with the host's USB bus; it should exit when done.
+  reset?: { image: string; entrypoint?: string[]; cmd?: string[]; everyMinutes?: number };
 }
 
 const env = process.env;
@@ -59,6 +68,9 @@ const TOPIC = 'airwaves/scheduler/state';
 const RESUME_TOPIC = 'airwaves/scheduler/resume';
 const INTERRUPT_TOPIC = 'airwaves/scheduler/interrupt';
 const INTERRUPT_MAX_MIN = 10;
+const SDR_TOPIC = 'airwaves/sdr'; // retained: {state: "ok" | "hung", since, lastOk, resets}
+const HA_DISCOVERY_TOPIC = 'homeassistant/binary_sensor/airwaves_sdr/config';
+const HUNG_CHECK_EVERY_MS = 3 * 60_000; // while hung: how often to see whether the dongle is back
 
 interface Resume {
   slotId: string;
@@ -109,12 +121,17 @@ const config: Config = JSON.parse(readFileSync(SLOTS_FILE, 'utf8'));
 const allSlots = config.slots;
 const docker = new Docker(DOCKER_SOCKET);
 const failures: Record<string, { at: number; reason: string }> = {};
+const sdr = new SdrWatch();
 const slotLogs: Record<string, { at: number; lines: string[] }> = {}; // last output of each slot's decoder, for debugging quiet slots
 
 let mqtt: MqttClient | undefined;
 if (env.MQTT_URL) {
   mqtt = mqttConnect(env.MQTT_URL, { username: env.MQTT_USER, password: env.MQTT_PASS, reconnectPeriod: 5000 });
-  mqtt.on('connect', () => console.log('mqtt connected'));
+  mqtt.on('connect', () => {
+    console.log('mqtt connected');
+    publishDiscovery();
+    publishSdr();
+  });
   mqtt.on('error', (e) => console.warn('mqtt:', e.message));
   mqtt.subscribe(INTERRUPT_TOPIC);
   mqtt.on('message', (topic, payload) => {
@@ -222,6 +239,7 @@ function publish(loop: Slot[], index: number, since: number, endsAt: number) {
     loop: loop.map((x) => ({ slotId: x.id, minutes: x.minutes, freqMhz: x.freqMhz })),
     index,
     loopMinutes: loop.reduce((a, x) => a + x.minutes, 0),
+    sdr: sdr.health,
     updatedAt: Date.now(),
   };
   mqtt?.publish(TOPIC, JSON.stringify(state), { retain: true });
@@ -232,6 +250,49 @@ function publish(loop: Slot[], index: number, since: number, endsAt: number) {
 function fail(s: Slot, reason: string) {
   failures[s.id] = { at: Date.now(), reason: reason.slice(0, 200) };
   log(`✖ ${s.id}: ${reason}`);
+  if (sdr.failed(reason, Date.now())) {
+    log('⚠ the dongle looks hung: pausing the loop, checking ADS-B every few minutes');
+    publishSdr();
+  }
+}
+
+/** The dongle's health on its own retained topic, for Home Assistant. */
+function publishSdr() {
+  const h = sdr.health;
+  mqtt?.publish(SDR_TOPIC, JSON.stringify({ state: h.state, since: iso(h.since), last_ok: iso(h.lastOk), resets: h.resets }), { retain: true });
+}
+const iso = (ms?: number) => (ms ? new Date(ms).toISOString() : null);
+
+/** Home Assistant MQTT discovery: a "problem" binary sensor that's on while the dongle is hung. */
+function publishDiscovery() {
+  const config = {
+    name: 'Airwaves SDR',
+    unique_id: 'airwaves_sdr',
+    device_class: 'problem',
+    state_topic: SDR_TOPIC,
+    value_template: '{{ value_json.state }}',
+    payload_on: 'hung',
+    payload_off: 'ok',
+    json_attributes_topic: SDR_TOPIC,
+    device: { identifiers: ['airwaves'], name: 'Airwaves', manufacturer: 'Airwaves', model: 'RTL-SDR scheduler' },
+  };
+  mqtt?.publish(HA_DISCOVERY_TOPIC, JSON.stringify(config), { retain: true });
+}
+
+/** State while the loop is paused on a hung dongle (nothing on air between checks). */
+function publishPaused() {
+  const state: SchedulerState = {
+    upNext: [],
+    slots: [...new Set(allSlots.map((x) => x.id))],
+    beta: [...new Set(allSlots.filter((x) => x.beta).map((x) => x.id))],
+    names: Object.fromEntries(allSlots.map((x) => [x.id, x.name]).reverse()),
+    failures,
+    slotLogs,
+    loopMinutes: 0,
+    sdr: sdr.health,
+    updatedAt: Date.now(),
+  };
+  mqtt?.publish(TOPIC, JSON.stringify(state), { retain: true });
 }
 
 // ---- slot lifecycle -----------------------------------------------------------------------------------
@@ -355,6 +416,11 @@ async function runSlot(loop: Slot[], i: number) {
         break;
       }
       if (!(await healthy(s))) break; // decoder died: move on rather than sit on a dead slot
+      // readsb still up well past its "wedged" timeout: the dongle is streaming.
+      if (s.id === 'adsb' && Date.now() - since >= SDR_PROOF_MS * TIME_SCALE && (sdr.hung || sdr.health.strikes > 0 || !sdr.health.lastOk || Date.now() - sdr.health.lastOk > 60_000)) {
+        if (sdr.ok(Date.now())) log('✔ the dongle is streaming again: resuming the loop');
+        publishSdr();
+      }
       if (Date.now() - lastBeat > 30_000) {
         publish(loop, i, since, endsAt);
         lastBeat = Date.now();
@@ -382,6 +448,49 @@ async function runInterrupt(loop: Slot[], i: number) {
   if (pendingInterrupt() === want) interrupt = undefined;
 }
 
+/** The dongle is hung: no point rotating. Reset it if we can, check it with ADS-B, repeat until it streams. */
+async function whileHung() {
+  const adsb = allSlots.find((s) => s.id === 'adsb' && !s.windows);
+  if (!adsb) return;
+  while (sdr.hung && !stopping) {
+    const r = config.reset;
+    if (r && sdr.resetDue(Date.now(), (r.everyMinutes ?? 10) * 60_000)) {
+      sdr.resetTried(Date.now());
+      await resetDongle(r).catch((e) => log('reset failed:', e instanceof Error ? e.message : String(e)));
+      publishSdr();
+    }
+    // Only an aircraft request matters now; anything else would cut the check short.
+    if (interrupt && interrupt.slotId !== adsb.id) interrupt = undefined;
+    const check: Slot = { ...adsb, name: `${adsb.name} (checking the dongle)`, minutes: Math.max(0.75, adsb.minutes) };
+    await runSlot([check], 0);
+    if (!sdr.hung || stopping) break;
+    publishPaused();
+    await nap(HUNG_CHECK_EVERY_MS * TIME_SCALE); // a tap wakes it for an immediate check
+  }
+}
+
+/** Runs the configured reset container (privileged, host USB) and waits for it to exit. */
+async function resetDongle(r: NonNullable<Config['reset']>) {
+  if (DRY_RUN) return log('[dry run] reset dongle');
+  const name = `${CONTAINER_PREFIX}reset`;
+  log('↺ resetting the dongle');
+  await docker.remove(name);
+  await docker.ensureImage(r.image);
+  await docker.create(name, {
+    Image: r.image,
+    Entrypoint: r.entrypoint,
+    Cmd: expandArgs(r.cmd),
+    HostConfig: { NetworkMode: 'host', Privileged: true, Binds: ['/dev/bus/usb:/dev/bus/usb'] },
+  });
+  await docker.start(name);
+  const until = Date.now() + 60_000;
+  while (Date.now() < until && (await docker.isRunning(name))) await sleep(1000);
+  const out = await docker.logs(name, 6).catch(() => '');
+  if (out) log(`↺ reset said: ${out.split('\n').slice(-3).join(' / ')}`);
+  await docker.remove(name);
+  await sleep(5000); // let the dongle come back on the bus
+}
+
 async function main() {
   await clearDongle();
   log(`slots: ${allSlots.map((s) => `${s.id} ${s.minutes}m${s.windows ? ' (windowed)' : ''}`).join(' → ')}${DRY_RUN ? ' [dry run]' : ''}`);
@@ -392,6 +501,7 @@ async function main() {
   for (let pass = 0; !stopping; pass++) {
     const loop = activeSlots(pass);
     for (let i = Math.min(start, loop.length - 1); i < loop.length && !stopping; i++) {
+      if (sdr.hung) await whileHung();
       await runSlot(loop, i);
       if (interrupt && !stopping) await runInterrupt(loop, i);
     }

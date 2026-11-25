@@ -1055,10 +1055,12 @@ export const MapView = memo(function MapView({ snapshot, feed }: { snapshot?: Sn
           </button>
         ))}
       </div>
-      {layer === 'live' && adsb?.error && (
+      {layer === 'live' && (snapshot?.sdr?.state === 'hung' || adsb?.error) && (
         <div className="overlay-warn">
-          <span className="tog" style={{ color: 'var(--wx)' }}>
-            Receiver unreachable{adsb.lastHeard ? ` · last heard ${ago(adsb.lastHeard, now)}` : ''}
+          <span className="tog" style={{ color: 'var(--wx)' }} title={adsb?.error}>
+            {snapshot?.sdr?.state === 'hung'
+              ? `Receiver offline · dongle stopped sending data${adsb?.lastHeard ? ` · last heard ${ago(adsb.lastHeard, now)}` : ''} · replug it`
+              : `Receiver unreachable${adsb?.lastHeard ? ` · last heard ${ago(adsb.lastHeard, now)}` : ''}`}
           </span>
         </div>
       )}
