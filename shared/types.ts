@@ -228,6 +228,7 @@ export interface Totals {
 /** One possible answer to "what was that?" (see collector/src/wwt.ts). */
 export interface WwtCandidate {
   hex: string;
+  typeCode?: string; // ICAO type designator, e.g. B738
   flight?: string;
   reg?: string;
   typeDesc?: string;

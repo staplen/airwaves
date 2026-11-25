@@ -1,4 +1,5 @@
 import type { Aircraft, Home, WwtCandidate } from '../../shared/types.ts';
+import { aircraftName, modelNumberWords } from './aircraftNames.ts';
 
 // "What was that?": given the aircraft on the air and the moment you looked up, rank what's most
 // likely to be the thing you saw or heard. Low and close beats everything else.
@@ -52,9 +53,27 @@ function fromHome(home: Home, lat: number, lon: number): { nm: number; bearing: 
   return { nm: Math.hypot(dx, dy), bearing: (Math.atan2(dx, dy) * 180) / Math.PI };
 }
 
-/** A very rough range from signal strength (dBFS): about 0.5 nm at −3, 5 nm at −23. Only used without a position. */
+// Signal strength (dBFS) against straight-line distance (nm), from three days of this receiver's own
+// positioned aircraft (Nov 2026, attic TV antenna): about −18 within a mile, −27 at 2–5 nm, −33 past 5 nm.
+// Thin data close in (a handful of samples) and a wide spread, so it's only a rough guide.
+const RSSI_CURVE: [number, number][] = [
+  [-15, 0.3],
+  [-18, 0.6],
+  [-21, 1.2],
+  [-27, 3],
+  [-33, 8],
+  [-36, 20],
+];
+
+/** A very rough range (nm) from signal strength, only used for aircraft that send no position. */
 export function rangeFromRssi(rssi: number): number {
-  return Math.min(20, Math.max(0.3, 0.5 * 10 ** ((-3 - rssi) / 20)));
+  if (rssi >= RSSI_CURVE[0][0]) return RSSI_CURVE[0][1];
+  for (let k = 1; k < RSSI_CURVE.length; k++) {
+    const [r1, d1] = RSSI_CURVE[k - 1];
+    const [r2, d2] = RSSI_CURVE[k];
+    if (rssi >= r2) return Math.exp(Math.log(d1) + ((rssi - r1) / (r2 - r1)) * (Math.log(d2) - Math.log(d1)));
+  }
+  return RSSI_CURVE[RSSI_CURVE.length - 1][1];
 }
 
 export function kindOf(a: Pick<Aircraft, 'category' | 'military'>): string {
@@ -117,6 +136,7 @@ export function rankCandidates(aircraft: Aircraft[], home: Home, tapAt: number, 
 function ident(a: Aircraft) {
   return {
     hex: a.hex,
+    typeCode: a.type,
     flight: a.flight,
     reg: a.reg,
     typeDesc: a.typeDesc,
@@ -132,7 +152,9 @@ const miles = (x: number) => `${x < 1 ? x.toFixed(1) : Math.round(x * 10) / 10} 
 
 /** One sentence to show or speak, e.g. "Probably a helicopter: Sikorsky UH-60 Black Hawk, US Army, 900 feet, 0.6 miles northeast, heading southeast." */
 export function describe(c: WwtCandidate, lead = true): string {
-  const what = [c.typeDesc ?? (c.flight || c.reg ? undefined : `unknown ${c.kind}`), c.owner, c.flight && c.flight !== c.reg ? `flight ${c.flight}` : c.reg].filter(Boolean);
+  const nick = aircraftName(c.typeCode, c.typeDesc, c.military)?.nick;
+  const type = c.typeDesc && nick && !c.typeDesc.toLowerCase().includes(nick.toLowerCase()) ? `${c.typeDesc} ("${nick}")` : c.typeDesc;
+  const what = [type ?? (c.flight || c.reg ? undefined : `unknown ${c.kind}`), c.owner, c.flight && c.flight !== c.reg ? `flight ${c.flight}` : c.reg].filter(Boolean);
   const where = [
     c.altFt !== undefined ? `${c.altFt.toLocaleString('en-US')} feet` : undefined,
     c.positioned
@@ -156,18 +178,37 @@ const BRANCHES: [RegExp, string][] = [
   [/\bmarine/i, 'Marines'],
   [/\bcoast guard\b/i, 'Coast Guard'],
   [/\bnational guard\b/i, 'National Guard'],
+  [/\bpark police\b/i, 'Park Police'],
+  [/\bcustoms\b/i, 'Customs and Border Protection'],
 ];
+const KNOWN_OPERATORS: [RegExp, string][] = [
+  [/^united parcel service/i, 'UPS'],
+  [/^federal express/i, 'FedEx'],
+  [/^net ?jets?\b/i, 'NetJets'],
+  [/^jet ?blue/i, 'JetBlue'],
+  [/^amazon/i, 'Amazon Air'],
+];
+// Public operators worth naming even off an airline callsign (police, medevac, county, state).
+const PUBLIC_OPERATOR = /\b(police|sheriff|county|state of|commonwealth|fire|rescue|medical|medevac|health|hospital|civil air patrol)\b/i;
 
-/** "United States Army" → "Army", "American Airlines Inc" → "American"; long private owners (trusts, banks, leasing) → nothing. */
-export function shortOwner(owner: string | undefined): string | undefined {
+/**
+ * The owner as said aloud: "United States Army" → "Army", "American Airlines Inc" → "American". Only for
+ * military and public operators, or when the plane is flying an airline callsign (`flight` like "AAL1234").
+ * Private owners (often a shell company, sometimes a person's name) are left out.
+ */
+export function shortOwner(owner: string | undefined, flight?: string): string | undefined {
   if (!owner) return undefined;
   if (/\b(united states|u\.?s\.?a?|us)\b/i.test(owner) || /\bguard\b/i.test(owner)) {
     for (const [re, name] of BRANCHES) if (re.test(owner)) return name;
   }
-  if (/\b(trust|trustee|bank|leasing|holdings|capital|services)\b/i.test(owner)) return undefined;
+  const airline = flight !== undefined && /^[A-Z]{3}\d/.test(flight.trim());
+  if (!airline && !PUBLIC_OPERATOR.test(owner)) return undefined;
+  for (const [re, name] of KNOWN_OPERATORS) if (re.test(owner)) return name;
+  // Shell and leasing names ("Cu III", "Aircol 12", "Sunrise Asset Management") aren't worth saying.
+  if (/\d|\b(I{2,3}|IV|VI{0,3})\b/.test(owner) || /\b(trust|trustee|bank|leasing|holdings|capital|asset|management|enterprises|properties|investments)\b/i.test(owner)) return undefined;
   let o = owner.replace(/[.,]/g, '').trim();
-  for (let k = 0; k < 3; k++) o = o.replace(/\s+(inc|llc|corp|corporation|co|ltd|lp|company|na)$/i, '');
-  o = o.replace(/\s+(air ?lines|airways)$/i, '');
+  for (let k = 0; k < 3; k++) o = o.replace(/\s+(inc|llc|corp|corporation|co|ltd|lp|company|na|sales|group|partners)$/i, '');
+  o = o.replace(/\s+(air ?lines|airways|aviation)$/i, '');
   return o && o.split(/\s+/).length <= 3 ? o : undefined;
 }
 
@@ -178,16 +219,18 @@ export function shortModel(typeDesc: string | undefined): string | undefined {
   const i = words.findIndex((w) => /\d/.test(w));
   if (i < 0) return words.length > 1 ? words.slice(1).join(' ') : words[0];
   const tail = words.slice(i + 1);
-  if (tail.length && tail.every((w) => /^[A-Za-z]+$/.test(w)) && !/^(ER|LR|XWB|MAX|NEO|II|III|IV)$/i.test(tail[0])) return tail.join(' ');
+  // A name after the model ("UH-60 Black Hawk", "BD-100 Challenger 350") is what people say.
+  if (tail.length && /^[A-Za-z]{3,}$/.test(tail[0]) && !/^(MAX|NEO|XWB)$/i.test(tail[0])) return tail.join(' ').replace(/(^|\s)(\d{3})(?=$|\s)/g, (_, sp: string, n: string) => `${sp}${modelNumberWords(Number(n))}`);
   const maker = words.slice(0, i).join(' ');
   // "Airbus A-319" → "Airbus 319": spoken the way people say it (Siri reads "A319" as "a 319"). Same for Embraer E-175.
   const lettered = words[i].match(/^([A-Z])-?(\d{3})/);
-  if (lettered && maker && maker[0].toUpperCase() === lettered[1]) return `${maker} ${lettered[2]}`;
+  if (lettered && maker && maker[0].toUpperCase() === lettered[1]) return `${maker} ${modelNumberWords(Number(lettered[2]))}`;
   const model = words[i].replace(/^(\d+)-\d+.*$/, '$1').replace(/^([A-Z])-(\d)/, '$1$2');
-  return /^\d/.test(model) && i > 0 ? `${maker} ${model}` : model;
+  const out = /^\d/.test(model) && i > 0 ? `${maker} ${model}` : model;
+  return out.replace(/(^|\s)(\d{3})(?=$|\s)/g, (_, sp: string, n: string) => `${sp}${modelNumberWords(Number(n))}`); // "Bell 429" → "Bell four-twenty-nine"
 }
 
-const SAY_KIND = new Set(['helicopter', 'light plane', 'small plane', 'glider', 'balloon', 'ultralight', 'drone']);
+const SAY_KIND = new Set(['helicopter', 'glider', 'balloon', 'ultralight', 'drone']); // worth saying next to a model name (plane size isn't)
 const article = (s: string) => (/^[aeiou]/i.test(s) ? 'an' : 'a');
 
 export function altWords(ft: number | undefined): string | undefined {
@@ -209,12 +252,16 @@ function whereWords(c: WwtCandidate): string {
 
 /** What it is, briefly: "Army Black Hawk helicopter", "American A321", "small plane". */
 export function shortName(c: WwtCandidate): string {
-  const owner = shortOwner(c.owner);
-  const name = [owner, shortModel(c.typeDesc)].filter(Boolean).join(' ');
-  // "military" is implied by a named service; airliner and jet go without saying once there's a model.
-  const kind = BRANCHES.some(([, b]) => b === owner) ? c.kind.replace(/^military /, '') : c.kind;
-  if (!name) return kind === 'aircraft' ? 'an aircraft' : `${article(kind)} ${kind}`;
-  return SAY_KIND.has(kind.replace(/^military /, '')) ? `${name} ${kind}` : name;
+  const owner = shortOwner(c.owner, c.flight);
+  const model = aircraftName(c.typeCode, c.typeDesc, c.military)?.say ?? shortModel(c.typeDesc);
+  const name = [owner, model].filter(Boolean).join(' ');
+  if (!model) {
+    // Nothing better than the kind: "a military helicopter", "Prince Georges County helicopter".
+    if (owner) return `${owner} ${c.kind.replace(/^military /, '')}`;
+    return c.kind === 'aircraft' ? 'an aircraft' : `${article(c.kind)} ${c.kind}`;
+  }
+  const kind = c.kind.replace(/^military /, ''); // a named model or service already says enough
+  return SAY_KIND.has(kind) ? `${name} ${kind}` : name;
 }
 
 /** The clauses of the short form, without a lead-in or full stop. */
