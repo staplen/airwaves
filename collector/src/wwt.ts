@@ -83,13 +83,44 @@ export function kindOf(a: Pick<Aircraft, 'category' | 'military'>): string {
 
 const round1 = (x: number) => Math.round(x * 10) / 10;
 
+// ---- true height ----------------------------------------------------------------------------------
+// readsb's alt_baro is pressure altitude (standard pressure assumed): on a high-pressure day it reads
+// hundreds of feet low. GPS altitude is above the WGS84 ellipsoid, which around DC sits about 33 m
+// (108 ft) below sea level. So: sea-level altitude = GPS + geoid offset, or failing that, pressure
+// altitude corrected with the local altimeter setting (any nearby aircraft's will do).
+
+export interface HeightOptions {
+  elevFt?: number; // ground elevation at the house (HOME_ELEV_FT): heights become "above you"
+  geoidFt?: number; // sea level above the ellipsoid here (GEOID_FT); about 108 ft around DC
+}
+export const DEFAULT_GEOID_FT = 108;
+const FT_PER_HPA = 27.3; // near sea level
+
+/** The local altimeter setting (hPa): the middle value of what nearby crews have set, if any. */
+export function localQnh(aircraft: Aircraft[]): number | undefined {
+  const q = aircraft.map((a) => a.qnh).filter((v): v is number => v !== undefined && v > 940 && v < 1060).sort((x, y) => x - y);
+  return q.length ? q[Math.floor(q.length / 2)] : undefined;
+}
+
+/** Best estimate of an aircraft's altitude above sea level (ft). */
+export function seaLevelAltFt(a: Aircraft, geoidFt = DEFAULT_GEOID_FT, qnh?: number): number | undefined {
+  if (a.altGeom !== undefined) return a.altGeom + geoidFt;
+  if (typeof a.altBaro !== 'number') return undefined;
+  const setting = a.qnh ?? qnh;
+  return setting ? a.altBaro + (setting - 1013.25) * FT_PER_HPA : a.altBaro;
+}
+
 /** Scores every aircraft for a tap at `tapAt`; best first. */
-export function rankCandidates(aircraft: Aircraft[], home: Home, tapAt: number, now: number): WwtCandidate[] {
+export function rankCandidates(aircraft: Aircraft[], home: Home, tapAt: number, now: number, opts: HeightOptions = {}): WwtCandidate[] {
   const from = Math.min(tapAt - LOOKBACK_MS, now);
+  const qnh = localQnh(aircraft);
+  const altRef = opts.elevFt !== undefined ? 'home' : 'msl';
   const out: WwtCandidate[] = [];
   for (const a of aircraft) {
     if (a.altBaro === 'ground' || a.seen > MAX_FIX_AGE_S) continue;
-    const alt0 = typeof a.altBaro === 'number' ? Math.max(0, a.altBaro) : undefined;
+    // Height above the house (or sea level, without HOME_ELEV_FT); this is what scores and what's said.
+    const msl = seaLevelAltFt(a, opts.geoidFt, qnh);
+    const alt0 = msl === undefined ? undefined : Math.max(0, msl - (opts.elevFt ?? 0));
     const fixAt = now - a.seen * 1000;
     if (a.lat !== undefined && a.lon !== undefined) {
       // Walk the window and keep the closest point (by score) to the house.
@@ -108,6 +139,7 @@ export function rankCandidates(aircraft: Aircraft[], home: Home, tapAt: number, 
         ...ident(a),
         positioned: true,
         altFt: best.alt === undefined ? undefined : Math.round(best.alt / 50) * 50,
+        altRef,
         groundMi: round1(best.ground * MI_PER_NM),
         slantMi: round1(best.slant * MI_PER_NM),
         bearing: best.ground < 0.15 ? undefined : SHORT[compassIndex(best.bearing)],
@@ -122,6 +154,7 @@ export function rankCandidates(aircraft: Aircraft[], home: Home, tapAt: number, 
         ...ident(a),
         positioned: false,
         altFt: alt0 === undefined ? undefined : Math.round(alt0 / 50) * 50,
+        altRef,
         slantMi: round1(slant * MI_PER_NM),
         rssi: a.rssi,
         heading: a.track === undefined ? undefined : SHORT[compassIndex(a.track)],
@@ -156,7 +189,7 @@ export function describe(c: WwtCandidate, lead = true): string {
   const type = c.typeDesc && nick && !c.typeDesc.toLowerCase().includes(nick.toLowerCase()) ? `${c.typeDesc} ("${nick}")` : c.typeDesc;
   const what = [type ?? (c.flight || c.reg ? undefined : `unknown ${c.kind}`), c.owner, c.flight && c.flight !== c.reg ? `flight ${c.flight}` : c.reg].filter(Boolean);
   const where = [
-    c.altFt !== undefined ? `${c.altFt.toLocaleString('en-US')} feet` : undefined,
+    c.altFt !== undefined ? `${c.altFt.toLocaleString('en-US')} feet${c.altRef === 'home' ? ' above you' : ''}` : undefined,
     c.positioned
       ? c.groundMi !== undefined && c.groundMi >= 0.2
         ? `${miles(c.groundMi)} ${dirWord(c.bearing) ?? 'away'}`
@@ -233,8 +266,14 @@ export function shortModel(typeDesc: string | undefined): string | undefined {
 const SAY_KIND = new Set(['helicopter', 'glider', 'balloon', 'ultralight', 'drone']); // worth saying next to a model name (plane size isn't)
 const article = (s: string) => (/^[aeiou]/i.test(s) ? 'an' : 'a');
 
-export function altWords(ft: number | undefined): string | undefined {
+export function altWords(ft: number | undefined, ref: WwtCandidate['altRef'] = 'msl'): string | undefined {
   if (ft === undefined) return undefined;
+  if (ref === 'home') {
+    // Height above you: precise enough to matter down low ("about 650 feet above you").
+    if (ft < 100) return 'under 100 feet above you';
+    const step = ft < 2000 ? 50 : ft < 18_000 ? 500 : 1000;
+    return `about ${(Math.round(ft / step) * step).toLocaleString('en-US')} feet above you`;
+  }
   if (ft < 1000) return 'under 1,000 feet';
   if (ft < 18_000) return `about ${(Math.round(ft / 500) * 500).toLocaleString('en-US')} feet`;
   return `${(Math.round(ft / 1000) * 1000).toLocaleString('en-US')} feet`;
@@ -266,7 +305,7 @@ export function shortName(c: WwtCandidate): string {
 
 /** The clauses of the short form, without a lead-in or full stop. */
 export function speakBare(c: WwtCandidate): string {
-  return [shortName(c), altWords(c.altFt), whereWords(c)].filter(Boolean).join(', ');
+  return [shortName(c), altWords(c.altFt, c.altRef), whereWords(c)].filter(Boolean).join(', ');
 }
 
 const cap = (s: string) => s.replace(/^./, (x) => x.toUpperCase());

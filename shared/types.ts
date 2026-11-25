@@ -13,6 +13,8 @@ export interface Aircraft {
   flight?: string;
   type?: string;
   altBaro?: number | 'ground';
+  altGeom?: number; // GPS altitude (ft above the WGS84 ellipsoid, not sea level)
+  qnh?: number; // the altimeter setting the crew has set (hPa): local sea-level pressure
   baroRate?: number;
   gs?: number;
   track?: number;
@@ -237,7 +239,8 @@ export interface WwtCandidate {
   military?: boolean;
   emergency?: string;
   positioned: boolean; // false: altitude/identity only, placed by signal strength
-  altFt?: number;
+  altFt?: number; // height above the house when HOME_ELEV_FT is set (altRef 'home'), else above sea level
+  altRef?: 'home' | 'msl';
   groundMi?: number; // at its closest to the house (positioned only)
   slantMi: number; // straight-line distance at its closest (or the signal-strength guess)
   bearing?: string; // where it was from the house at its closest: "NE"

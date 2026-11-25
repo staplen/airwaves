@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Aircraft } from '../../shared/types.ts';
 import { aircraftName, modelNumberWords } from '../src/aircraftNames.ts';
-import { describe, rangeFromRssi, rankCandidates, shortModel, shortOwner, speak } from '../src/wwt.ts';
+import { describe, localQnh, rangeFromRssi, rankCandidates, seaLevelAltFt, shortModel, shortOwner, speak } from '../src/wwt.ts';
 
 const home = { lat: 40, lon: -75 }; // a made-up spot, not the receiver
 const NM_LAT = 1 / 60; // degrees of latitude per nautical mile
@@ -129,4 +129,28 @@ test('size words and private owners stay out of the spoken name', () => {
   assert.equal(speak(dolphin), 'Dolphin helicopter, under 1,000 feet, overhead.');
   const [county] = rankCandidates([plane({ hex: 'ccc', category: 'A7', altBaro: 900, lat: home.lat, lon: home.lon, owner: 'Prince Georges County' })], home, now, now);
   assert.equal(speak(county), 'Prince Georges County helicopter, under 1,000 feet, overhead.');
+});
+
+test('true height: GPS altitude or pressure altitude corrected with the local altimeter setting', () => {
+  // A real pass from the logs: 550 ft pressure altitude, 875 ft GPS, crews' setting 1029.6 hPa.
+  const hawk = plane({ hex: 'aaa', altBaro: 550, altGeom: 875, qnh: 1029.6 });
+  assert.equal(seaLevelAltFt(hawk), 983); // 875 + 108
+  assert.ok(Math.abs(seaLevelAltFt({ ...hawk, altGeom: undefined })! - 996) < 1); // 550 + 16.35 hPa × 27.3: agrees within ~15 ft
+  // No GPS altitude and no setting of its own: borrow the local setting from other aircraft.
+  const others = [plane({ hex: 'x', qnh: 1029 }), plane({ hex: 'y', qnh: 1030 }), plane({ hex: 'z', qnh: 1031 })];
+  assert.equal(localQnh(others), 1030);
+  assert.ok(Math.abs(seaLevelAltFt(plane({ hex: 'b', altBaro: 550 }), 108, 1030)! - 1007) < 1);
+  assert.equal(seaLevelAltFt(plane({ hex: 'c', altBaro: 550 })), 550); // nothing to correct with
+});
+
+test('says height above you when the ground elevation is set', () => {
+  const hawk = plane({ hex: 'aaa', type: 'H60', category: 'A7', military: true, altBaro: 550, altGeom: 875, qnh: 1029.6, lat: home.lat + 0.5 * NM_LAT, lon: home.lon, typeDesc: 'Sikorsky UH-60 Black Hawk', owner: 'United States Army', gs: 0, track: 80 });
+  const [above] = rankCandidates([hawk], home, now, now, { elevFt: 330 });
+  assert.equal(above.altRef, 'home');
+  assert.equal(above.altFt, 650); // 983 − 330, to the nearest 50
+  assert.equal(speak(above), 'Army Black Hawk helicopter, about 650 feet above you, just north.');
+  assert.match(describe(above), /650 feet above you/);
+  const [sea] = rankCandidates([hawk], home, now, now); // no elevation: above sea level, corrected
+  assert.equal(sea.altRef, 'msl');
+  assert.equal(speak(sea), 'Army Black Hawk helicopter, about 1,000 feet, just north.');
 });

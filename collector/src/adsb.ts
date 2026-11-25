@@ -97,6 +97,8 @@ export function toAircraft(a: Record<string, unknown>): Aircraft {
     emergency: emergency && emergency !== 'none' ? emergency : undefined,
     selAltFt: num(a.nav_altitude_mcp) ?? num(a.nav_altitude_fms),
     altBaro: a.alt_baro === 'ground' ? 'ground' : num(a.alt_baro),
+    altGeom: num(a.alt_geom),
+    qnh: num(a.nav_qnh),
     baroRate: num(a.baro_rate),
     gs: num(a.gs),
     track: num(a.track),

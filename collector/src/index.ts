@@ -6,7 +6,7 @@ import { dirname, extname, join, normalize } from 'node:path';
 import { connect as mqttConnect } from 'mqtt';
 import type { Aircraft, AisFixed, Balloon, FeedItem, Home, Overlays, Pin, PinMetric, RadioStation, SchedulerState, WwtAnswer, SensorInfo, SlotStat, Snapshot, SourceStatus, SpectrumHeat, Tracks, Vessel } from '../../shared/types.ts';
 import { AdsbSource } from './adsb.ts';
-import { altWords, describe, FIRM_MI, rankCandidates, speak, speakBare } from './wwt.ts';
+import { altWords, DEFAULT_GEOID_FT, describe, FIRM_MI, rankCandidates, speak, speakBare } from './wwt.ts';
 import { AisDecoder, shipTypeName } from './ais.ts';
 import { ClipWatcher, existingClips, type Clip } from './clips.ts';
 import { parseSame } from './eas.ts';
@@ -682,6 +682,10 @@ const WWT_LISTEN_MS = 15_000; // keep listening this long for something close be
 const WWT_GIVE_UP_MS = 30_000; // the radio never came on
 const WWT_FAST_POLL_MS = 500; // read readsb's output this often while a question is open (normally every 2 s)
 const WWT_FINAL = new Set<WwtAnswer['status']>(['answer', 'nothing', 'no-radio']);
+// Ground elevation at the house (ft above sea level) turns heights into "above you"; GEOID_FT is sea level
+// above the GPS ellipsoid locally (about 108 ft around DC). Both live in airwaves.env, never in the repo.
+const envNum = (v: string | undefined) => (v !== undefined && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined);
+const WWT_HEIGHT = { elevFt: envNum(env.HOME_ELEV_FT), geoidFt: envNum(env.GEOID_FT) ?? DEFAULT_GEOID_FT };
 const NO_TRANSPONDER = 'Could be something without a transponder.';
 const wwtTimes = new Map<number, { radio?: number; answered?: number }>(); // per tap, for the timing log
 let wwtFastUntil = 0;
@@ -719,7 +723,7 @@ function wwtAnswer(at: number, now = Date.now()): WwtAnswer {
   if (t && !t.radio) t.radio = Math.max(at, adsb.okSince);
   const readyAt = Math.max(at, adsb.okSince + WWT_SETTLE_MS); // when every nearby position should have come in
   const aircraft = snapshot().aircraft;
-  const ranked = rankCandidates(aircraft, home, at, now);
+  const ranked = rankCandidates(aircraft, home, at, now, WWT_HEIGHT);
   const close = ranked.filter((c) => c.close);
   const candidates = (close.length ? close : ranked).slice(0, 4);
   const heard = aircraft.length;
@@ -731,7 +735,7 @@ function wwtAnswer(at: number, now = Date.now()): WwtAnswer {
   }
   const onAir = heard ? `Radio's on. Hearing ${planes(heard)}.` : "Radio's on. No planes yet.";
   if (best) {
-    const alt = altWords(best.altFt);
+    const alt = altWords(best.altFt, best.altRef);
     const say = best.positioned ? `So far: ${speakBare(best)}.` : `Something ${best.altFt !== undefined && best.altFt < 5000 ? 'low' : 'close'}${alt ? `, ${alt}` : ''}. Getting its position.`;
     return done({ status: 'early', say, sayLong: say, candidates, heard });
   }

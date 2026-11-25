@@ -17,7 +17,8 @@ Home Assistant OS path mapping (the SSH session runs in its own container):
 3. **Settings.**
    `cp /share/airwaves/app/deploy/airwaves.env.example /share/airwaves/airwaves.env` and fill in
    `MQTT_PASS`, `HOME_LAT`/`HOME_LON` (receiver location, used only on the Pi) and `HD_STATIONS`.
-   Optionally set `PUBLIC_HOME_LAT`/`PUBLIC_HOME_LON` (where the public site draws the receiver) and `GAS_METER_ID`.
+   Optionally set `PUBLIC_HOME_LAT`/`PUBLIC_HOME_LON` (where the public site draws the receiver), `GAS_METER_ID`, and
+   `HOME_ELEV_FT` (ground elevation in feet, so "What was that?" gives heights above you).
 4. **Build** the dashboard and local decoder images: `sh /share/airwaves/app/deploy/update.sh`.
    It also creates the data and audio folders under `/share/airwaves` and `/media/airwaves`, and copies
    `deploy/sonde/station.cfg` (uploads disabled) into place. The first run of the HD Radio image
