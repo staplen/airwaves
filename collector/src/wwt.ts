@@ -77,8 +77,11 @@ export function rangeFromRssi(rssi: number): number {
   return RSSI_CURVE[RSSI_CURVE.length - 1][1];
 }
 
-export function kindOf(a: Pick<Aircraft, 'category' | 'military'>): string {
-  const k = (a.category && KINDS[a.category]) || 'aircraft';
+// Helicopter type codes, for helicopters that don't send an emitter category.
+const HELICOPTER_TYPES = /^(H60|H64|H47|H46|H53S?|H500|H269|EC\d\d|AS(32|50|55|65)|A1[0-3]9|A169|B06|B2[0-3]\d|B4[0-2]\d|B505|S76|S92|R22|R44|R66|MD[56]\d|UH1|EN[24]8)$/;
+
+export function kindOf(a: Pick<Aircraft, 'category' | 'military' | 'type'>): string {
+  const k = (a.category && KINDS[a.category]) || (a.type && HELICOPTER_TYPES.test(a.type) ? 'helicopter' : 'aircraft');
   return a.military ? `military ${k}` : k;
 }
 
@@ -290,8 +293,34 @@ function whereWords(c: WwtCandidate): string {
   return `${Math.round(d)} miles ${dir}`;
 }
 
-/** What it is, briefly: "Army Black Hawk helicopter", "American A321", "small plane". */
+// Civil helicopters are named by who flies them, not who built them: "Airbus H135" means little out loud, while
+// "medevac helicopter" says what it is. (The written card still has the model.) Military ones keep their names.
+const MEDEVAC_OWNER = /\b(emerg(ency)?\.? med|medevac|med ?flight|life ?(line|flight|net|star|guard)|metro aviation|phi\b|air methods|medstar|care ?flight|air evac|hospital|health|medical)/i;
+const NEWS_OWNER = /\b(television|broadcast(ing)?|tv|news)\b/i;
+const SMALL_HELICOPTERS = new Set(['R22', 'R44', 'R66', 'B06', 'B505', 'MD52', 'MD60', 'H269', 'H500', 'EN28', 'EN48']);
+const PLACE_FIXES: [RegExp, string][] = [[/\bGeorges\b/, "George's"], [/\bAnne Arundel\b/i, 'Anne Arundel']];
+
+/** "a medevac helicopter", "a Prince George's police helicopter", "a small helicopter" (owner as in the database). */
+export function helicopterRole(owner: string | undefined, typeCode: string | undefined): string {
+  if (owner) {
+    if (MEDEVAC_OWNER.test(owner)) return 'a medevac helicopter';
+    if (/\bpark police\b/i.test(owner)) return 'a Park Police helicopter';
+    if (/\bstate police\b|^state of maryland\b|^maryland state\b/i.test(owner)) return 'a State Police helicopter';
+    const county = owner.match(/^(.+?)\s+county\b/i); // around here, county helicopters are police aviation units
+    if (county) {
+      let place = county[1].toLowerCase().replace(/\b[a-z]/g, (x) => x.toUpperCase());
+      for (const [re, fix] of PLACE_FIXES) place = place.replace(re, fix);
+      return `a ${place} police helicopter`;
+    }
+    if (/\b(police|sheriff)\b/i.test(owner)) return 'a police helicopter';
+    if (NEWS_OWNER.test(owner)) return 'a news helicopter';
+  }
+  return SMALL_HELICOPTERS.has(typeCode ?? '') ? 'a small helicopter' : 'a helicopter';
+}
+
+/** What it is, briefly: "Army Black Hawk helicopter", "a medevac helicopter", "American A321", "small plane". */
 export function shortName(c: WwtCandidate): string {
+  if (c.kind === 'helicopter') return helicopterRole(c.owner, c.typeCode); // civil ("military helicopter" otherwise)
   const owner = shortOwner(c.owner, c.flight);
   const model = aircraftName(c.typeCode, c.typeDesc, c.military)?.say ?? shortModel(c.typeDesc);
   const name = [owner, model].filter(Boolean).join(' ');
@@ -343,6 +372,33 @@ export function receiverDown(h: ReceiverHealth, now: number): { since?: number; 
     .filter((f) => isSdrDown(f.reason))
     .sort((a, b) => b.at - a.at)[0];
   return hung && hung.at > (h.adsbLastHeard ?? 0) ? { since: h.adsbLastHeard, at: hung.at, reason: hung.reason, certain: false } : undefined;
+}
+
+export type RadioGate =
+  | { kind: 'offline'; since?: number; recheck: boolean } // say it's offline (recheck: the scheduler is checking again)
+  | { kind: 'failed'; reason: string } // the slot this tap asked for failed for some other reason
+  | { kind: 'tuning'; say: string }
+  | { kind: 'gave-up' } // the radio never came on and nothing explains why
+  | { kind: 'on' }; // aircraft data is coming in: go on to rank what's overhead
+
+/**
+ * Can "what was that?" answer from the aircraft data yet? Health comes before the data: readsb on a hung dongle
+ * keeps writing fresh files (with no aircraft) until it gives up, so fresh files alone aren't proof the radio works.
+ * Only messages decoded since the tap (`streaming`) are.
+ */
+export function radioGate(i: { at: number; now: number; fresh: boolean; streaming: boolean; health: ReceiverHealth; giveUpMs: number }): RadioGate {
+  const { at, now, health } = i;
+  const down = i.streaming ? undefined : receiverDown(health, now);
+  if (down) {
+    // The scheduler says it's hung (the tap still makes it check again), or it failed after the tap, or time's up.
+    if (down.certain || down.at >= at || now - at > i.giveUpMs) return { kind: 'offline', since: down.since, recheck: down.certain && health.rotating };
+    return { kind: 'tuning', say: 'The receiver looked offline earlier. Trying anyway.' }; // a replug since would bring it back
+  }
+  if (i.fresh) return { kind: 'on' };
+  const ownTry = health.failures?.adsb; // the aircraft slot this tap asked for, if it has already failed
+  if (ownTry && ownTry.at >= at) return { kind: 'failed', reason: ownTry.reason };
+  if (now - at > i.giveUpMs) return { kind: 'gave-up' };
+  return { kind: 'tuning', say: 'Tuning in.' };
 }
 
 /** "The receiver is offline. Nothing heard since 12:37 PM." (short, for a voice assistant) */

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Aircraft } from '../../shared/types.ts';
 import { aircraftName, modelNumberWords } from '../src/aircraftNames.ts';
-import { describe, localQnh, offlineWords, rangeFromRssi, rankCandidates, receiverDown, seaLevelAltFt, shortModel, shortOwner, speak } from '../src/wwt.ts';
+import { describe, helicopterRole, localQnh, offlineWords, radioGate, rangeFromRssi, rankCandidates, receiverDown, seaLevelAltFt, shortModel, shortOwner, speak } from '../src/wwt.ts';
 
 const home = { lat: 40, lon: -75 }; // a made-up spot, not the receiver
 const NM_LAT = 1 / 60; // degrees of latitude per nautical mile
@@ -128,7 +128,7 @@ test('size words and private owners stay out of the spoken name', () => {
   const [dolphin] = rankCandidates([plane({ hex: 'bbb', type: 'AS65', category: 'A7', military: true, altBaro: 800, lat: home.lat, lon: home.lon, typeDesc: 'Eurocopter MH-65D Dolphin' })], home, now, now);
   assert.equal(speak(dolphin), 'Dolphin helicopter, under 1,000 feet, overhead.');
   const [county] = rankCandidates([plane({ hex: 'ccc', category: 'A7', altBaro: 900, lat: home.lat, lon: home.lon, owner: 'Prince Georges County' })], home, now, now);
-  assert.equal(speak(county), 'Prince Georges County helicopter, under 1,000 feet, overhead.');
+  assert.equal(speak(county), "A Prince George's police helicopter, under 1,000 feet, overhead.");
 });
 
 test('true height: GPS altitude or pressure altitude corrected with the local altimeter setting', () => {
@@ -178,4 +178,47 @@ test('offline words name the last time anything was heard', () => {
   assert.equal(offlineWords(at, at + 2 * 3600_000), 'The receiver is offline. Nothing heard since 12:28 PM.');
   assert.equal(offlineWords(at, at + 30 * 3600_000), 'The receiver is offline. Nothing heard since 12:28 PM Wednesday.');
   assert.equal(offlineWords(undefined, at), 'The receiver is offline.');
+});
+
+test('what was that? says the receiver is offline while it is hung, even while a check has readsb writing empty files', () => {
+  const at = now - 5000;
+  const hung = { rotating: true, sdrHung: true, adsbLastOk: now - 500, adsbLastHeard: now - 23 * 3600_000 };
+  const gate = (over: Partial<Parameters<typeof radioGate>[0]>) => radioGate({ at, now, fresh: false, streaming: false, health: hung, giveUpMs: 30_000, ...over });
+  // No check running yet: at once.
+  assert.deepEqual(gate({}), { kind: 'offline', since: hung.adsbLastHeard, recheck: true });
+  // The tap's check is running: fresh files, but no messages. Still offline (this used to end in "No aircraft heard").
+  assert.equal(gate({ fresh: true }).kind, 'offline');
+  // Replugged: the check decodes messages, so go on to the aircraft.
+  assert.equal(gate({ fresh: true, streaming: true }).kind, 'on');
+});
+
+test('what was that? with a dongle failure before the hang is declared: tries, then says offline', () => {
+  const at = now - 5000;
+  const health = { rotating: true, failures: { uat: { at: now - 120_000, reason: 'Message source reports error: TIMEOUT' } }, adsbLastOk: now - 500, adsbLastHeard: now - 600_000 };
+  const gate = (over: Partial<Parameters<typeof radioGate>[0]>) => radioGate({ at, now, fresh: true, streaming: false, health, giveUpMs: 30_000, ...over });
+  assert.equal(gate({}).kind, 'tuning');
+  assert.equal(gate({ now: at + 31_000 }).kind, 'offline');
+  assert.equal(gate({ streaming: true }).kind, 'on');
+  // Healthy and quiet (no failures): fresh data is enough.
+  assert.equal(radioGate({ at, now, fresh: true, streaming: false, health: { rotating: true, adsbLastOk: now }, giveUpMs: 30_000 }).kind, 'on');
+});
+
+test('civil helicopters are named by who flies them, military ones keep their names', () => {
+  assert.equal(helicopterRole('CENTER FOR EMERG MED OF W PE', 'EC35'), 'a medevac helicopter');
+  assert.equal(helicopterRole('METRO AVIATION INC', 'EC35'), 'a medevac helicopter');
+  assert.equal(helicopterRole('PRINCE GEORGES COUNTY', 'MD52'), "a Prince George's police helicopter");
+  assert.equal(helicopterRole('FAIRFAX COUNTY POLICE DEPT', 'B429'), 'a Fairfax police helicopter');
+  assert.equal(helicopterRole('MARYLAND STATE POLICE', 'A139'), 'a State Police helicopter');
+  assert.equal(helicopterRole('US PARK POLICE', 'B412'), 'a Park Police helicopter');
+  assert.equal(helicopterRole('SINCLAIR BROADCASTING GROUP', 'AS50'), 'a news helicopter');
+  assert.equal(helicopterRole('SKYLINE TOURS LLC', 'R44'), 'a small helicopter');
+  assert.equal(helicopterRole(undefined, 'A119'), 'a helicopter');
+  // Spoken: role first, no maker or model number.
+  const medevac = rankCandidates([plane({ hex: 'eee', type: 'EC45', category: 'A7', altBaro: 450, lat: home.lat + 0.2 * NM_LAT, lon: home.lon, typeDesc: 'Airbus Helicopters EC-145', owner: 'CENTER FOR EMERGENCY MEDICINE' })], home, now, now)[0];
+  assert.match(speak(medevac), /^A medevac helicopter, /);
+  // No category sent: the type code still says helicopter; a Hawker jet (H25B) doesn't.
+  assert.equal(rankCandidates([plane({ hex: 'fff', type: 'EC35', altBaro: 600, lat: home.lat, lon: home.lon })], home, now, now)[0].kind, 'helicopter');
+  assert.equal(rankCandidates([plane({ hex: 'ggg', type: 'H25B', altBaro: 30000, lat: home.lat, lon: home.lon })], home, now, now)[0].kind, 'aircraft');
+  const huey = rankCandidates([plane({ hex: 'hhh', type: 'B212', category: 'A7', military: true, altBaro: 1200, lat: home.lat, lon: home.lon, typeDesc: 'Bell UH-1N Iroquois', owner: 'United States Air Force' })], home, now, now)[0];
+  assert.match(speak(huey), /^Air Force Twin Huey helicopter/);
 });

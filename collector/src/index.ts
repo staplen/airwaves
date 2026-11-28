@@ -6,7 +6,7 @@ import { dirname, extname, join, normalize } from 'node:path';
 import { connect as mqttConnect } from 'mqtt';
 import type { Aircraft, AisFixed, Balloon, FeedItem, Home, Overlays, Pin, PinMetric, RadioStation, SchedulerState, WwtAnswer, SensorInfo, SlotStat, Snapshot, SourceStatus, SpectrumHeat, Tracks, Vessel } from '../../shared/types.ts';
 import { AdsbSource } from './adsb.ts';
-import { altWords, DEFAULT_GEOID_FT, describe, FIRM_MI, offlineWords, rankCandidates, receiverDown, speak, speakBare } from './wwt.ts';
+import { altWords, DEFAULT_GEOID_FT, describe, FIRM_MI, offlineWords, radioGate, rankCandidates, speak, speakBare } from './wwt.ts';
 import { AisDecoder, shipTypeName } from './ais.ts';
 import { ClipWatcher, existingClips, type Clip } from './clips.ts';
 import { parseSame } from './eas.ts';
@@ -693,6 +693,7 @@ const WWT_FINAL = new Set<WwtAnswer['status']>(['answer', 'nothing', 'no-radio']
 const envNum = (v: string | undefined) => (v !== undefined && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined);
 const WWT_HEIGHT = { elevFt: envNum(env.HOME_ELEV_FT), geoidFt: envNum(env.GEOID_FT) ?? DEFAULT_GEOID_FT };
 const NO_TRANSPONDER = 'Could be something without a transponder.';
+const OFFLINE_DETAIL = 'The radio stopped sending data. Replugging the USB dongle fixes it.';
 const wwtTimes = new Map<number, { radio?: number; answered?: number }>(); // per tap, for the timing log
 let wwtFastUntil = 0;
 
@@ -706,7 +707,6 @@ setInterval(() => {
   if (Date.now() < wwtFastUntil) void adsb.poll();
 }, WWT_FAST_POLL_MS);
 
-const planes = (n: number) => `${n} ${n === 1 ? 'plane' : 'planes'}`;
 
 function wwtAnswer(at: number, now = Date.now()): WwtAnswer {
   const t = wwtTimes.get(at);
@@ -719,7 +719,7 @@ function wwtAnswer(at: number, now = Date.now()): WwtAnswer {
     return { at, now, ...a, next: WWT_FINAL.has(a.status) ? 'stop' : 'wait', timing: t ? { radioS: secs(t.radio), answerS: secs(t.answered) } : undefined };
   };
   const plain = (status: WwtAnswer['status'], say: string) => done({ status, say, sayLong: say, candidates: [], heard: 0 });
-  const offline = (since: number | undefined, detail = 'The radio stopped sending data. Resetting or replugging the USB dongle usually fixes it.') => {
+  const offline = (since: number | undefined, detail = OFFLINE_DETAIL) => {
     const say = offlineWords(since, now, env.TIMEZONE ?? 'America/New_York');
     return done({ status: 'no-radio', say, sayLong: `${say} ${detail}`, candidates: [], heard: 0 });
   };
@@ -727,16 +727,18 @@ function wwtAnswer(at: number, now = Date.now()): WwtAnswer {
   if (!home) return plain('no-radio', "The receiver's location isn't known yet.");
   // Data counts once it's from after the tap (or the radio was already on aircraft).
   const fresh = adsb.lastOk >= at - 3000 && now - adsb.lastOk < 10_000;
-  if (!fresh) {
-    const down = receiverDown({ rotating: rotating(), sdrHung: scheduler?.sdr?.state === 'hung', failures: scheduler?.failures, adsbLastHeard: adsb.lastHeard, adsbLastOk: adsb.lastOk, adsbLastError: adsb.lastError }, now);
-    const ownTry = scheduler?.failures?.adsb; // the aircraft slot this tap asked for, if it has already failed
-    // The scheduler says it's hung (the tap still asks it to check again), or it failed after the tap, or time's up.
-    if (down && (down.certain || down.at >= at || now - at > WWT_GIVE_UP_MS)) return offline(down.since);
-    if (ownTry && ownTry.at >= at) return offline(adsb.lastHeard, `The aircraft radio failed to start: ${ownTry.reason}`);
-    if (now - at > WWT_GIVE_UP_MS) return plain('no-radio', "The aircraft radio didn't come on. Is the scheduler running?");
-    // It hung earlier, but this tap tries again (a replug or reset since would bring it back).
-    return plain('tuning', down ? 'The receiver looked offline earlier. Trying anyway.' : 'Tuning in.');
-  }
+  const gate = radioGate({
+    at,
+    now,
+    fresh,
+    streaming: (adsb.lastHeard ?? 0) >= at - 3000, // messages decoded since the tap
+    health: { rotating: rotating(), sdrHung: scheduler?.sdr?.state === 'hung', failures: scheduler?.failures, adsbLastHeard: adsb.lastHeard, adsbLastOk: adsb.lastOk, adsbLastError: adsb.lastError },
+    giveUpMs: WWT_GIVE_UP_MS,
+  });
+  if (gate.kind === 'offline') return offline(gate.since, gate.recheck ? `${OFFLINE_DETAIL} Checking it again now: if you've just replugged it, ask again in a minute.` : undefined);
+  if (gate.kind === 'failed') return offline(adsb.lastHeard, `The aircraft radio failed to start: ${gate.reason}`);
+  if (gate.kind === 'gave-up') return plain('no-radio', "The aircraft radio didn't come on. Is the scheduler running?");
+  if (gate.kind === 'tuning') return plain('tuning', gate.say);
   if (t && !t.radio) t.radio = Math.max(at, adsb.okSince);
   const readyAt = Math.max(at, adsb.okSince + WWT_SETTLE_MS); // when every nearby position should have come in
   const aircraft = snapshot().aircraft;
@@ -750,7 +752,7 @@ function wwtAnswer(at: number, now = Date.now()): WwtAnswer {
     const maybe = close[1] !== undefined && close[1].score - best.score < 0.5;
     return done({ status: 'answer', say: speak(best, maybe), sayLong: describe(best), candidates, heard });
   }
-  const onAir = heard ? `Radio's on. Hearing ${planes(heard)}.` : "Radio's on. No planes yet.";
+  const onAir = heard ? `Radio's on. Hearing ${heard} aircraft.` : "Radio's on. No aircraft yet.";
   if (best) {
     const alt = altWords(best.altFt, best.altRef);
     const say = best.positioned ? `So far: ${speakBare(best)}.` : `Something ${best.altFt !== undefined && best.altFt < 5000 ? 'low' : 'close'}${alt ? `, ${alt}` : ''}. Getting its position.`;
@@ -781,7 +783,7 @@ function wwtWait(res: ServerResponse, at: number, waitMs: number, onChange: bool
     if (!ready && !onChange && waitMs > 0) {
       // Out of time while waiting for a final answer: say where it got to.
       if (a.status === 'tuning') a.say = 'Still tuning in. Ask again in a few seconds.';
-      else if (a.status === 'listening') a.say = a.candidates[0] ? `Nothing close yet. Nearest: ${speakBare(a.candidates[0])}.` : 'Radio is on, but no planes yet.';
+      else if (a.status === 'listening') a.say = a.candidates[0] ? `Nothing close yet. Nearest: ${speakBare(a.candidates[0])}.` : 'Radio is on, but no aircraft yet.';
     }
     json(a);
   };
